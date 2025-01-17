@@ -160,15 +160,19 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
   }
 
   Widget _buildHeader() {
+    Color baseColor = Color(0xFF85B6C4);
+    Color statusColor =
+        _getCardColor(logisticaDetail?['semaforo']?.toString() ?? '');
+
     return Container(
       margin: EdgeInsets.all(10),
       padding: EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: _getCardColor(logisticaDetail?['semaforo']?.toString() ?? ''),
+        color: baseColor,
         borderRadius: BorderRadius.circular(15),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: baseColor.withOpacity(0.2),
             blurRadius: 10,
             offset: Offset(0, 5),
           ),
@@ -193,21 +197,6 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                     ),
                   ),
                 ],
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Text(
-                  _safeToString(logisticaDetail?['semaforo']).toUpperCase(),
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
               ),
             ],
           ),

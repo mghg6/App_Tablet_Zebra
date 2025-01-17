@@ -12,9 +12,22 @@ class LogisticaListScreen extends StatefulWidget {
 
 class _LogisticaListScreenState extends State<LogisticaListScreen> {
   List<dynamic> logisticas = [];
+  List<dynamic> logisticasFiltradas = [];
   bool isLoading = true;
   String? errorMessage;
   final ScrollController _scrollController = ScrollController();
+
+  // Variables para los filtros
+  String? auxVentasSeleccionado;
+  String? estatusSeleccionado;
+  String? diasSeleccionado;
+  String? completadoSeleccionado;
+
+  // Sets para almacenar valores únicos para los filtros
+  Set<String> auxVentasOpciones = {};
+  Set<String> estatusOpciones = {};
+  Set<String> diasOpciones = {};
+  Set<String> completadoOpciones = {};
 
   static const Map<String, Color> semaforoColors = {
     'ROJO': Colors.red,
@@ -53,8 +66,11 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       if (!mounted) return;
 
       if (response.statusCode == 200) {
+        final data = json.decode(response.body);
         setState(() {
-          logisticas = json.decode(response.body);
+          logisticas = data;
+          logisticasFiltradas = data;
+          _actualizarOpcionesFiltros();
           errorMessage = null;
           isLoading = false;
         });
@@ -69,6 +85,86 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       });
       _showErrorSnackBar(e.toString());
     }
+  }
+
+  void _actualizarOpcionesFiltros() {
+    auxVentasOpciones.clear();
+    estatusOpciones.clear();
+    diasOpciones.clear();
+    completadoOpciones.clear();
+
+    for (var logistica in logisticas) {
+      // Agregar opciones de Aux Ventas
+      if (logistica['auxVentas'] != null) {
+        auxVentasOpciones.add(logistica['auxVentas'].toString());
+      }
+
+      // Procesar detalles para otros filtros
+      List<dynamic> detalles = logistica['detalles'] ?? [];
+      for (var detalle in detalles) {
+        if (detalle['estatus2'] != null) {
+          estatusOpciones.add(detalle['estatus2'].toString());
+        }
+        if (detalle['dias'] != null) {
+          diasOpciones.add(detalle['dias'].toString());
+        }
+        if (detalle['completado'] != null) {
+          completadoOpciones.add(detalle['completado'].toString());
+        }
+      }
+    }
+  }
+
+  void _aplicarFiltros() {
+    setState(() {
+      logisticasFiltradas = logisticas.where((logistica) {
+        bool cumpleFiltros = true;
+
+        // Filtro de Aux Ventas
+        if (auxVentasSeleccionado != null) {
+          cumpleFiltros = cumpleFiltros &&
+              logistica['auxVentas']?.toString() == auxVentasSeleccionado;
+        }
+
+        // Filtros basados en detalles
+        if (estatusSeleccionado != null ||
+            diasSeleccionado != null ||
+            completadoSeleccionado != null) {
+          List<dynamic> detalles = logistica['detalles'] ?? [];
+          bool cumpleDetalles = detalles.any((detalle) {
+            bool cumpleDetalle = true;
+
+            if (estatusSeleccionado != null) {
+              cumpleDetalle = cumpleDetalle &&
+                  detalle['estatus2']?.toString() == estatusSeleccionado;
+            }
+            if (diasSeleccionado != null) {
+              cumpleDetalle = cumpleDetalle &&
+                  detalle['dias']?.toString() == diasSeleccionado;
+            }
+            if (completadoSeleccionado != null) {
+              cumpleDetalle = cumpleDetalle &&
+                  detalle['completado']?.toString() == completadoSeleccionado;
+            }
+
+            return cumpleDetalle;
+          });
+          cumpleFiltros = cumpleFiltros && cumpleDetalles;
+        }
+
+        return cumpleFiltros;
+      }).toList();
+    });
+  }
+
+  void _limpiarFiltros() {
+    setState(() {
+      auxVentasSeleccionado = null;
+      estatusSeleccionado = null;
+      diasSeleccionado = null;
+      completadoSeleccionado = null;
+      logisticasFiltradas = logisticas;
+    });
   }
 
   void _showErrorSnackBar(String message) {
@@ -93,8 +189,9 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   }
 
   Widget _buildLogisticaCard(dynamic logistica) {
-    final color = _getCardColor(logistica['semaforo']?.toString());
     List<dynamic> detalles = logistica['detalles'] ?? [];
+    // Color base del diseño
+    Color baseColor = Color(0xFF85B6C4);
 
     return Container(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -103,29 +200,29 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            color,
-            color.withOpacity(0.8),
+            baseColor.withOpacity(0.1),
+            Colors.white,
           ],
         ),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.3),
-            blurRadius: 12,
-            offset: Offset(0, 6),
-          ),
-          BoxShadow(
-            color: color.withOpacity(0.2),
-            blurRadius: 4,
+            color: baseColor.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 10,
             offset: Offset(0, 2),
           ),
         ],
+        border: Border.all(
+          color: baseColor.withOpacity(0.1),
+          width: 1,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
@@ -135,87 +232,48 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
             ),
           ),
           child: Padding(
-            padding: EdgeInsets.all(20),
+            padding: EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Header
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(
-                              Icons.local_shipping,
-                              color: Colors.white,
-                              size: 24,
-                            ),
-                          ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Logística',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                Text(
-                                  '#${_safeToString(logistica['nO_LOGISTICA'])}',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     Container(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
+                        color: baseColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Colors.white.withOpacity(0.3),
+                          color: baseColor.withOpacity(0.2),
                           width: 1,
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Icon(
+                        Icons.local_shipping,
+                        color: baseColor,
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
+                          Text(
+                            '#${_safeToString(logistica['nO_LOGISTICA'])}',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[800],
                             ),
                           ),
-                          SizedBox(width: 8),
                           Text(
-                            _safeToString(logistica['semaforo']).toUpperCase(),
+                            'Logística',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
                               fontSize: 13,
-                              letterSpacing: 0.5,
+                              color: baseColor,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ],
@@ -223,90 +281,96 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                     ),
                   ],
                 ),
-                SizedBox(height: 20),
-                // Contenido Principal
+                SizedBox(height: 16),
+
+                // Información Principal
                 Container(
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
                   padding: EdgeInsets.all(16),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: baseColor.withOpacity(0.2),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: baseColor.withOpacity(0.05),
+                        spreadRadius: 1,
+                        blurRadius: 5,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
                     children: [
-                      // Columna izquierda
-                      Expanded(
-                        flex: 3,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildMainInfoItem(
-                              Icons.business,
-                              'Cliente',
-                              _safeToString(logistica['cliente']),
-                            ),
-                            SizedBox(height: 12),
-                            _buildMainInfoItem(
-                              Icons.person_outline,
-                              'Aux Ventas',
-                              _safeToString(logistica['auxVentas']),
-                            ),
-                            SizedBox(height: 12),
-                            _buildMainInfoItem(
-                              Icons.calendar_today_outlined,
-                              'Programado',
-                              logistica['fechaProg']
-                                      ?.toString()
-                                      .split(' ')[0] ??
-                                  'N/A',
-                            ),
-                          ],
-                        ),
+                      _buildMainInfoItem(
+                        Icons.business,
+                        'Cliente',
+                        _safeToString(logistica['cliente']),
+                        baseColor,
                       ),
-                      // Separador
-                      Container(
-                        width: 1,
-                        margin: EdgeInsets.symmetric(horizontal: 16),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.white.withOpacity(0.1),
-                              Colors.white.withOpacity(0.3),
-                              Colors.white.withOpacity(0.1),
-                            ],
-                          ),
-                        ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Divider(color: baseColor.withOpacity(0.1)),
                       ),
-                      // Columna derecha - Detalles
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: detalles.isEmpty
-                              ? [
-                                  Center(
-                                    child: Padding(
-                                      padding: EdgeInsets.all(16),
-                                      child: Text(
-                                        'Sin detalles',
-                                        style: TextStyle(
-                                          color: Colors.white70,
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                ]
-                              : detalles
-                                  .map((detalle) => _buildDetalleItem(detalle))
-                                  .toList(),
-                        ),
+                      _buildMainInfoItem(
+                        Icons.person_outline,
+                        'Aux Ventas',
+                        _safeToString(logistica['auxVentas']),
+                        baseColor,
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Divider(color: baseColor.withOpacity(0.1)),
+                      ),
+                      _buildMainInfoItem(
+                        Icons.calendar_today_outlined,
+                        'Programado',
+                        logistica['fechaProg']?.toString().split(' ')[0] ??
+                            'N/A',
+                        baseColor,
                       ),
                     ],
                   ),
                 ),
+
+                SizedBox(height: 16),
+
+                // Detalles Header
+                Container(
+                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: baseColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Detalles',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: baseColor,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 12),
+
+                // Detalles Content
+                detalles.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Sin detalles',
+                          style: TextStyle(
+                            color: baseColor.withOpacity(0.6),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      )
+                    : Column(
+                        children: detalles
+                            .map((detalle) => _buildDetalleItem(detalle))
+                            .toList(),
+                      ),
               ],
             ),
           ),
@@ -315,16 +379,21 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     );
   }
 
-  Widget _buildMainInfoItem(IconData icon, String label, String value) {
+  Widget _buildMainInfoItem(
+      IconData icon, String label, String value, Color baseColor) {
     return Row(
       children: [
         Container(
           padding: EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.1),
+            color: baseColor.withOpacity(0.1),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(icon, color: Colors.white, size: 16),
+          child: Icon(
+            icon,
+            color: baseColor,
+            size: 20,
+          ),
         ),
         SizedBox(width: 12),
         Expanded(
@@ -334,17 +403,17 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.white70,
+                  fontSize: 13,
+                  color: baseColor,
                   fontWeight: FontWeight.w500,
                 ),
               ),
               Text(
                 value,
                 style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                  color: Colors.grey[800],
+                  fontWeight: FontWeight.w500,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -362,66 +431,214 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     final bool isFalta =
         detalle['completado']?.toString().toLowerCase() == 'falta';
 
+    // Obtener el color del semáforo
+    Color semaforoColor =
+        semaforoColors[detalle['semaforo']?.toString().toUpperCase()] ??
+            Colors.grey;
+
     return Container(
       margin: EdgeInsets.only(bottom: 12),
-      padding: EdgeInsets.all(12),
+      padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.1),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            semaforoColor.withOpacity(0.15),
+            semaforoColor.withOpacity(0.05),
+          ],
+        ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Colors.white.withOpacity(0.2),
-          width: 1,
+          color: semaforoColor.withOpacity(0.3),
+          width: 1.5,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: semaforoColor.withOpacity(0.1),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Primera fila: Estatus y Código de Item
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: isRetrasado
-                      ? Colors.red.withOpacity(0.2)
-                      : Colors.green.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(6),
+                      ? Colors.red.withOpacity(0.1)
+                      : Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isRetrasado
+                        ? Colors.red.withOpacity(0.2)
+                        : Colors.green.withOpacity(0.2),
+                    width: 1,
+                  ),
                 ),
                 child: Text(
                   _safeToString(detalle['estatus2']),
                   style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.white,
+                    fontSize: 12,
+                    color: isRetrasado ? Colors.red[700] : Colors.green[700],
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.blue.withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 14,
+                      color: Colors.blue[700],
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      _safeToString(detalle['itemCode']),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          SizedBox(height: 8),
+          SizedBox(height: 12),
+
+          // Segunda fila: Información de días
+          Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 16,
+                      color: semaforoColor,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      _safeToString(detalle['dia']),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[800],
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '${_safeToString(detalle['dias'])} días',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[800],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 12),
+
+          // Tercera fila: Stock e Inventario
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildDetalleInfo('Día', _safeToString(detalle['dia'])),
-              _buildDetalleInfo('Días', _safeToString(detalle['dias'])),
-            ],
-          ),
-          SizedBox(height: 4),
-          Row(
-            children: [
-              Icon(
-                isFalta
-                    ? Icons.warning_amber_rounded
-                    : Icons.check_circle_outline,
-                color: isFalta ? Colors.orange : Colors.green,
-                size: 16,
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.purple.withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      color: Colors.purple[700],
+                      size: 16,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      'Stock: ${_safeToString(detalle['stock'])}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.purple[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              SizedBox(width: 4),
-              Text(
-                _safeToString(detalle['completado']),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color:
+                      (isFalta ? Colors.orange : Colors.green).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: (isFalta ? Colors.orange : Colors.green)
+                        .withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isFalta
+                          ? Icons.warning_amber_rounded
+                          : Icons.check_circle_outline,
+                      color: isFalta ? Colors.orange[700] : Colors.green[700],
+                      size: 16,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      _safeToString(detalle['completado']),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isFalta ? Colors.orange[700] : Colors.green[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -455,59 +672,150 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     );
   }
 
-  Widget _buildInfoRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, color: Colors.white70, size: 20),
-        SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.white70,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.white,
-              fontWeight: FontWeight.w500,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        title: Text('Logísticas'),
         actions: [
+          // Filtro Aux Ventas
+          PopupMenuButton<String>(
+            icon: Icon(Icons.person_outline),
+            tooltip: 'Filtrar por Aux Ventas',
+            onSelected: (String value) {
+              setState(() {
+                auxVentasSeleccionado = value;
+                _aplicarFiltros();
+              });
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem(
+                value: null,
+                child: Text('Todos'),
+                onTap: () {
+                  setState(() {
+                    auxVentasSeleccionado = null;
+                    _aplicarFiltros();
+                  });
+                },
+              ),
+              ...auxVentasOpciones.map((String value) => PopupMenuItem(
+                    value: value,
+                    child: Text(value),
+                  )),
+            ],
+          ),
+          // Filtro Estatus
+          PopupMenuButton<String>(
+            icon: Icon(Icons.assignment_outlined),
+            tooltip: 'Filtrar por Estatus',
+            onSelected: (String value) {
+              setState(() {
+                estatusSeleccionado = value;
+                _aplicarFiltros();
+              });
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem(
+                value: null,
+                child: Text('Todos'),
+                onTap: () {
+                  setState(() {
+                    estatusSeleccionado = null;
+                    _aplicarFiltros();
+                  });
+                },
+              ),
+              ...estatusOpciones.map((String value) => PopupMenuItem(
+                    value: value,
+                    child: Text(value),
+                  )),
+            ],
+          ),
+          // Filtro Días
+          PopupMenuButton<String>(
+            icon: Icon(Icons.calendar_today),
+            tooltip: 'Filtrar por Días',
+            onSelected: (String value) {
+              setState(() {
+                diasSeleccionado = value;
+                _aplicarFiltros();
+              });
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem(
+                value: null,
+                child: Text('Todos'),
+                onTap: () {
+                  setState(() {
+                    diasSeleccionado = null;
+                    _aplicarFiltros();
+                  });
+                },
+              ),
+              ...diasOpciones.map((String value) => PopupMenuItem(
+                    value: value,
+                    child: Text(value),
+                  )),
+            ],
+          ),
+          // Filtro Completado
+          PopupMenuButton<String>(
+            icon: Icon(Icons.check_circle_outline),
+            tooltip: 'Filtrar por Completado',
+            onSelected: (String value) {
+              setState(() {
+                completadoSeleccionado = value;
+                _aplicarFiltros();
+              });
+            },
+            itemBuilder: (BuildContext context) => [
+              PopupMenuItem(
+                value: null,
+                child: Text('Todos'),
+                onTap: () {
+                  setState(() {
+                    completadoSeleccionado = null;
+                    _aplicarFiltros();
+                  });
+                },
+              ),
+              ...completadoOpciones.map((String value) => PopupMenuItem(
+                    value: value,
+                    child: Text(value),
+                  )),
+            ],
+          ),
+          // Botón para limpiar filtros
+          IconButton(
+            icon: Icon(Icons.filter_list_off),
+            onPressed: _limpiarFiltros,
+            tooltip: 'Limpiar filtros',
+          ),
           IconButton(
             icon: Icon(Icons.refresh),
             onPressed: _fetchLogisticas,
+            tooltip: 'Recargar',
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(auxVentasSeleccionado != null ||
+                  estatusSeleccionado != null ||
+                  diasSeleccionado != null ||
+                  completadoSeleccionado != null
+              ? 30
+              : 0),
+          child: _buildFiltrosActivos(),
+        ),
       ),
       body: isLoading
-          ? Center(
-              child: CircularProgressIndicator(),
-            )
+          ? Center(child: CircularProgressIndicator())
           : errorMessage != null
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.error_outline,
-                        size: 48,
-                        color: Colors.red,
-                      ),
+                      Icon(Icons.error_outline, size: 48, color: Colors.red),
                       SizedBox(height: 16),
                       Text(
                         errorMessage!,
@@ -528,10 +836,10 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                 )
               : RefreshIndicator(
                   onRefresh: _fetchLogisticas,
-                  child: logisticas.isEmpty
+                  child: logisticasFiltradas.isEmpty
                       ? Center(
                           child: Text(
-                            'No hay logísticas disponibles',
+                            'No hay logísticas que coincidan con los filtros',
                             style: TextStyle(fontSize: 16, color: Colors.grey),
                           ),
                         )
@@ -539,12 +847,74 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                           controller: _scrollController,
                           physics: AlwaysScrollableScrollPhysics(),
                           padding: EdgeInsets.symmetric(vertical: 8),
-                          itemCount: logisticas.length,
+                          itemCount: logisticasFiltradas.length,
                           itemBuilder: (context, index) {
-                            return _buildLogisticaCard(logisticas[index]);
+                            return _buildLogisticaCard(
+                                logisticasFiltradas[index]);
                           },
                         ),
                 ),
+    );
+  }
+
+  Widget _buildFiltrosActivos() {
+    List<Widget> chips = [];
+
+    if (auxVentasSeleccionado != null) {
+      chips.add(_buildFilterChip('Aux Ventas: $auxVentasSeleccionado', () {
+        setState(() {
+          auxVentasSeleccionado = null;
+          _aplicarFiltros();
+        });
+      }));
+    }
+
+    if (estatusSeleccionado != null) {
+      chips.add(_buildFilterChip('Estatus: $estatusSeleccionado', () {
+        setState(() {
+          estatusSeleccionado = null;
+          _aplicarFiltros();
+        });
+      }));
+    }
+
+    if (diasSeleccionado != null) {
+      chips.add(_buildFilterChip('Días: $diasSeleccionado', () {
+        setState(() {
+          diasSeleccionado = null;
+          _aplicarFiltros();
+        });
+      }));
+    }
+
+    if (completadoSeleccionado != null) {
+      chips.add(_buildFilterChip('Completado: $completadoSeleccionado', () {
+        setState(() {
+          completadoSeleccionado = null;
+          _aplicarFiltros();
+        });
+      }));
+    }
+
+    return chips.isEmpty
+        ? Container()
+        : Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: chips),
+            ),
+          );
+  }
+
+  Widget _buildFilterChip(String label, VoidCallback onDelete) {
+    return Padding(
+      padding: EdgeInsets.only(right: 8),
+      child: Chip(
+        label: Text(label),
+        deleteIcon: Icon(Icons.close, size: 18),
+        onDeleted: onDelete,
+      ),
     );
   }
 }
