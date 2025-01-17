@@ -32,33 +32,13 @@ class Producto {
     required this.horaEntrada,
   });
 
-  // Método auxiliar para obtener la URL de la imagen en base a `productPrintCard`
-  static Future<String> obtenerUrlImagen(String? productPrintCard) async {
-    String defaultUrl =
-        'https://calibri.mx/bioflex/wp-content/uploads/2024/03/standup_pouch.png';
-    if (productPrintCard == null) {
-      return defaultUrl;
-    }
-    try {
-      final response = await http.get(
-        Uri.parse("http://172.16.10.31/api/Image/$productPrintCard"),
-      );
-      if (response.statusCode == 200) {
-        final imageData = jsonDecode(response.body);
-        return imageData['imageBase64'] ?? defaultUrl;
-      } else {
-        print("Error al obtener la imagen: ${response.statusCode}");
-        return defaultUrl;
-      }
-    } catch (error) {
-      print("Error al cargar la imagen: $error");
-      return defaultUrl;
-    }
-  }
-
   // Factory method for JSON deserialization
   static Future<Producto> fromJson(Map<String, dynamic> json) async {
-    String urlImagen = await obtenerUrlImagen(json['productPrintCard']);
+    final urlImagen = await _obtenerUrlImagen(json['productPrintCard']);
+    final fechaEntrada = json['createdAt'] ?? DateTime.now().toString();
+    final horaEntrada = json['horaEntrada'] ??
+        "${DateTime.now().hour}:${DateTime.now().minute}";
+
     return Producto(
       urlImagen: urlImagen,
       fecha: json['fecha'] ?? '',
@@ -70,10 +50,9 @@ class Producto {
       pesoTarima: json['pesoTarima']?.toString() ?? '',
       piezas: json['piezas']?.toString() ?? '',
       uom: json['uom'] ?? '',
-      fechaEntrada: json['createdAt'] ?? DateTime.now().toString(),
+      fechaEntrada: fechaEntrada,
       productPrintCard: json['productPrintCard'] ?? '',
-      horaEntrada: json['horaEntrada'] ??
-          "${DateTime.now().hour}:${DateTime.now().minute}",
+      horaEntrada: horaEntrada,
     );
   }
 
@@ -94,5 +73,32 @@ class Producto {
       'productPrintCard': productPrintCard,
       'horaEntrada': horaEntrada,
     };
+  }
+
+  // Método auxiliar para obtener la URL de la imagen en base a `productPrintCard`
+  static Future<String> _obtenerUrlImagen(String? productPrintCard) async {
+    const defaultUrl =
+        'https://calibri.mx/bioflex/wp-content/uploads/2024/03/standup_pouch.png';
+
+    if (productPrintCard == null) {
+      return defaultUrl;
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse("http://172.16.10.31/api/Image/$productPrintCard"),
+      );
+
+      if (response.statusCode == 200) {
+        final imageData = jsonDecode(response.body);
+        return imageData['imageBase64'] ?? defaultUrl;
+      } else {
+        print("Error al obtener la imagen: ${response.statusCode}");
+      }
+    } catch (error) {
+      print("Error al cargar la imagen: $error");
+    }
+
+    return defaultUrl;
   }
 }

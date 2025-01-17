@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,73 +13,158 @@ class ScanAndCapture extends StatefulWidget {
   _ScanAndCaptureState createState() => _ScanAndCaptureState();
 }
 
-class _ScanAndCaptureState extends State<ScanAndCapture> {
+class _ScanAndCaptureState extends State<ScanAndCapture>
+    with WidgetsBindingObserver {
   static const platform = MethodChannel('zebra_scanner');
-  List<Map<String, dynamic>> epcs = []; // Lista para múltiples EPCs
-  List<File> images = [];
+  final List<Map<String, dynamic>> epcs = [];
+  final List<File> images = [];
   bool isUploading = false;
-  TextEditingController fechaController = TextEditingController();
-  TextEditingController operadorController = TextEditingController();
-  TextEditingController noLogisticaController = TextEditingController();
-  TextEditingController observacionesController = TextEditingController();
-  void _enableScanner() {
-    platform.setMethodCallHandler((call) async {
-      if (call.method == "barcodeScanned") {
-        String rawCode = call.arguments.toString().split(RegExp(r'[ -]')).first;
-        String formattedCode = rawCode.padLeft(16, '0');
-        fetchEPCInfo(formattedCode);
-      }
-    });
+  bool _isScanning = false;
+  bool _isProcessing = false;
+  final TextEditingController fechaController = TextEditingController();
+  final TextEditingController operadorController = TextEditingController();
+  final TextEditingController noLogisticaController = TextEditingController();
+  final TextEditingController observacionesController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
   }
 
-  void _showImagePreview(File image) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return Dialog(
-          child: Stack(
-            children: [
-              // Imagen a pantalla completa dentro de la modal
-              Image.file(image, fit: BoxFit.contain),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).pop();
-                  },
-                  child: Icon(Icons.close, color: Colors.red, size: 30),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _disableScanner() {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopScanner();
     platform.setMethodCallHandler(null);
+    fechaController.dispose();
+    operadorController.dispose();
+    noLogisticaController.dispose();
+    observacionesController.dispose();
+    _clearAllData();
+    super.dispose();
   }
 
-  Future<void> startScanning() async {
-    try {
-      await platform.invokeMethod('startScan');
-    } on PlatformException catch (e) {
-      _showSnackBar("Error al iniciar escaneo: ${e.message}");
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        if (_isScanning) {
+          _enableScanner();
+        }
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        _stopScanner();
+        break;
     }
   }
 
-  Future<void> fetchEPCInfo(String epc) async {
-    final url = Uri.parse("http://172.16.10.31/api/Socket/$epc");
+  Future<void> _stopScanner() async {
+    if (!mounted) return;
+
     try {
-      final response = await http.get(url);
+      await platform.invokeMethod('stopScan');
+      _isScanning = false;
+    } on PlatformException catch (e) {
+      if (mounted) {
+        _showSnackBar("Error al detener escaneo: ${e.message}");
+      }
+    }
+  }
 
-      if (response.statusCode == 200) {
-        print("Respuesta del servidor: ${response.body}");
+  void _enableScanner() {
+    if (!mounted) return;
+
+    platform.setMethodCallHandler((call) async {
+      if (call.method == "barcodeScanned" && !_isProcessing && mounted) {
+        _isProcessing = true;
+        try {
+          final rawCode =
+              call.arguments.toString().split(RegExp(r'[ -]')).first;
+          final formattedCode = rawCode.padLeft(16, '0');
+          await _processEPC(formattedCode);
+        } finally {
+          _isProcessing = false;
+        }
+      }
+      return null;
+    });
+
+    _isScanning = true;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _enableScanner();
+  }
+
+  Future<void> startScanning() async {
+    if (!mounted) return;
+
+    try {
+      await platform.invokeMethod('startScan');
+      _isScanning = true;
+    } on PlatformException catch (e) {
+      if (mounted) {
+        _showSnackBar("Error al iniciar escaneo: ${e.message}");
+      }
+    }
+  }
+
+  // Método para seleccionar fotos de la galería
+  Future<void> selectFromGallery() async {
+    try {
+      final List<XFile> selectedImages = await _imagePicker.pickMultiImage(
+        imageQuality: 50,
+      );
+
+      if (selectedImages.isNotEmpty && mounted) {
+        for (XFile image in selectedImages) {
+          final File originalImage = File(image.path);
+          final optimizedImage = await _optimizeAndSaveImage(originalImage);
+
+          if (optimizedImage != null && mounted) {
+            setState(() {
+              images.add(optimizedImage);
+            });
+            // Limpiar imagen original
+            if (await originalImage.exists()) {
+              await originalImage.delete();
+            }
+          }
+        }
+        _showSnackBar("${selectedImages.length} imágenes agregadas");
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar("Error al cargar imágenes: ${e.toString()}");
+      }
+    }
+  }
+
+  // EPC Processing with optimized memory management
+  Future<void> _processEPC(String epc) async {
+    if (epcs.any((e) => e['epc'] == epc)) {
+      if (mounted) _showSnackBar("EPC ya escaneado");
+      return;
+    }
+
+    try {
+      final url = Uri.parse("http://172.16.10.31/api/Socket/$epc");
+      final response = await http.get(url).timeout(
+            Duration(seconds: 10),
+            onTimeout: () => throw TimeoutException('Tiempo de espera agotado'),
+          );
+
+      if (response.statusCode == 200 && mounted) {
         final data = Map<String, dynamic>.from(jsonDecode(response.body));
-
-        // Añadir EPC escaneado a la lista
         setState(() {
           epcs.add({
             'epc': epc,
@@ -89,183 +175,273 @@ class _ScanAndCaptureState extends State<ScanAndCapture> {
             'trazabilidad': data['trazabilidad'] ?? 'N/A',
           });
         });
-
-        print("EPC procesado: ${epcs.last}");
       } else {
-        _showSnackBar("Error al obtener datos del EPC.");
+        throw HttpException('Error en la respuesta del servidor');
       }
     } catch (e) {
-      _showSnackBar("Error de conexión al servidor.");
+      if (mounted) _showSnackBar("Error al procesar EPC: ${e.toString()}");
     }
   }
 
-  Future<File?> compressImage(File file) async {
+  // Optimized image capture with memory management
+  Future<void> captureImage() async {
     try {
-      // Ruta temporal para almacenar la imagen comprimida
-      final directory = await getTemporaryDirectory();
-      final targetPath =
-          '${directory.path}/${DateTime.now().millisecondsSinceEpoch}_compressed.jpg';
-
-      // Comprimir la imagen
-      final result = await FlutterImageCompress.compressAndGetFile(
-        file.path, // Ruta del archivo original
-        targetPath, // Ruta destino del archivo comprimido
-        quality: 75, // Ajusta la calidad (0-100)
+      final XFile? pickedFile = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 50,
+        maxWidth: 1024,
+        maxHeight: 768,
       );
 
-      return result != null
-          ? File(result.path)
-          : null; // Convertir a File si es necesario
+      if (pickedFile != null && mounted) {
+        final File originalImage = File(pickedFile.path);
+        final optimizedImage = await _optimizeAndSaveImage(originalImage);
+
+        if (optimizedImage != null && mounted) {
+          setState(() {
+            images.add(optimizedImage);
+          });
+          // Cleanup original image
+          if (await originalImage.exists()) {
+            await originalImage.delete();
+          }
+        }
+      }
     } catch (e) {
-      print("Error al comprimir la imagen: $e");
+      if (mounted) _showSnackBar("Error al capturar imagen: ${e.toString()}");
+    }
+  }
+
+  // Optimized image processing
+  Future<File?> _optimizeAndSaveImage(File originalImage) async {
+    try {
+      final directory = await getTemporaryDirectory();
+      final targetPath =
+          '${directory.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      final result = await FlutterImageCompress.compressAndGetFile(
+        originalImage.path,
+        targetPath,
+        quality: 50,
+        format: CompressFormat.jpeg,
+        keepExif: false,
+      );
+
+      if (result == null) throw Exception('Fallo en la optimización de imagen');
+      return File(result.path);
+    } catch (e) {
+      print("Error en optimización de imagen: $e");
       return null;
     }
   }
 
-  Future<void> captureImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
-    if (pickedFile != null) {
-      setState(() {
-        images.add(File(pickedFile.path));
-      });
+  // Optimized data upload with batch processing
+  Future<void> uploadData() async {
+    if (epcs.isEmpty) {
+      _showSnackBar("No hay EPCs para subir.");
+      return;
+    }
+
+    if (fechaController.text.isEmpty ||
+        operadorController.text.isEmpty ||
+        noLogisticaController.text.isEmpty) {
+      _showSnackBar("Por favor complete todos los campos requeridos.");
+      return;
+    }
+
+    setState(() => isUploading = true);
+
+    try {
+      final request = await _createUploadRequest();
+      final streamedResponse = await request.send().timeout(
+            Duration(minutes: 5),
+            onTimeout: () =>
+                throw TimeoutException('Tiempo de espera agotado en la subida'),
+          );
+
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        await _handleSuccessfulUpload();
+      } else {
+        throw HttpException(
+            'Error en la respuesta del servidor: ${response.statusCode}');
+      }
+    } catch (e) {
+      _showErrorDialog("Error de conexión", "Detalles: ${e.toString()}");
+    } finally {
+      if (mounted) setState(() => isUploading = false);
+    }
+  }
+
+  // Optimized upload request creation
+  Future<http.MultipartRequest> _createUploadRequest() async {
+    final url = Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create");
+    final request = http.MultipartRequest('POST', url);
+
+    request.fields.addAll({
+      'Fecha': fechaController.text,
+      'NombreOperador': operadorController.text,
+      'NumeroLogistica': noLogisticaController.text,
+      'Observaciones': observacionesController.text,
+      'FechaCreacion': DateTime.now().toIso8601String(),
+      'Dispositivo': "ET40",
+      'ListaEPCs': jsonEncode(epcs.map((epc) => epc['epc']).toList()),
+    });
+
+    for (var image in images) {
+      if (await image.exists()) {
+        request.files
+            .add(await http.MultipartFile.fromPath('Fotos', image.path));
+      }
+    }
+
+    return request;
+  }
+
+  // Optimized success handler with proper cleanup
+  Future<void> _handleSuccessfulUpload() async {
+    try {
+      await _clearAllData();
+      if (mounted) _showSnackBar("Datos subidos exitosamente");
+    } catch (e) {
+      print("Error en limpieza post-subida: $e");
+    }
+  }
+
+  // Optimized data clearing
+  Future<void> _clearAllData() async {
+    try {
+      final directory = await getTemporaryDirectory();
+      if (await directory.exists()) {
+        final files = directory.listSync();
+        for (var file in files) {
+          if (file is File) await file.delete();
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          epcs.clear();
+          images.clear();
+          fechaController.clear();
+          operadorController.clear();
+          noLogisticaController.clear();
+          observacionesController.clear();
+        });
+      }
+    } catch (e) {
+      print("Error en limpieza de datos: $e");
+      throw e;
     }
   }
 
   void _showUploadConfirmationModal() {
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (BuildContext context) {
         return Dialog(
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: SingleChildScrollView(
-            // Envuelve todo el contenido
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min, // Ajusta el tamaño
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Título
-                  Center(
-                    child: Text(
-                      "Confirmación de Datos",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF46707E),
-                      ),
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Text(
+                    "Confirmación de Datos",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF46707E),
                     ),
                   ),
-                  SizedBox(height: 16),
-
-                  // Fecha
-                  TextField(
-                    controller: fechaController,
-                    decoration: InputDecoration(
-                      labelText: "Fecha",
-                      hintText: "YYYY-MM-DD",
-                      border: OutlineInputBorder(),
-                    ),
-                    readOnly: true,
-                    onTap: () async {
-                      DateTime? pickedDate = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now(),
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime.now(),
-                      );
-                      if (pickedDate != null) {
-                        setState(() {
-                          fechaController.text =
-                              pickedDate.toIso8601String().split('T').first;
-                        });
-                      }
-                    },
+                ),
+                SizedBox(height: 16),
+                TextField(
+                  controller: fechaController,
+                  decoration: InputDecoration(
+                    labelText: "Fecha *",
+                    hintText: "YYYY-MM-DD",
+                    border: OutlineInputBorder(),
                   ),
-                  SizedBox(height: 8),
-
-                  // Operador
-                  TextField(
-                    controller: operadorController,
-                    decoration: InputDecoration(
-                      labelText: "Operador",
-                      border: OutlineInputBorder(),
-                    ),
+                  readOnly: true,
+                  onTap: () async {
+                    final date = await showDatePicker(
+                      context: context,
+                      initialDate: DateTime.now(),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                    );
+                    if (date != null && mounted) {
+                      setState(() {
+                        fechaController.text =
+                            date.toIso8601String().split('T').first;
+                      });
+                    }
+                  },
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: operadorController,
+                  decoration: InputDecoration(
+                    labelText: "Operador *",
+                    border: OutlineInputBorder(),
                   ),
-                  SizedBox(height: 8),
-
-                  // No. Logística
-                  TextField(
-                    controller: noLogisticaController,
-                    decoration: InputDecoration(
-                      labelText: "No. Logística",
-                      border: OutlineInputBorder(),
-                    ),
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: noLogisticaController,
+                  decoration: InputDecoration(
+                    labelText: "No. Logística *",
+                    border: OutlineInputBorder(),
                   ),
-                  SizedBox(height: 8),
-
-                  // Observaciones
-                  TextField(
-                    controller: observacionesController,
-                    decoration: InputDecoration(
-                      labelText: "Observaciones",
-                      border: OutlineInputBorder(),
-                    ),
-                    maxLines: 3,
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: observacionesController,
+                  decoration: InputDecoration(
+                    labelText: "Observaciones",
+                    border: OutlineInputBorder(),
                   ),
-                  SizedBox(height: 16),
-
-                  // Información adicional
-                  Text("Total de Fotos: ${images.length}",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  Text("Número de EPCs leídos: ${epcs.length}",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  SizedBox(height: 8),
-
-                  // Lista de trazabilidades
-                  Text("Trazabilidades:",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
-                  SizedBox(
-                    height: 100,
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: epcs.length,
-                      itemBuilder: (context, index) {
-                        return Text("- ${epcs[index]['trazabilidad']}");
+                  maxLines: 3,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  "* Campos requeridos",
+                  style: TextStyle(color: Colors.red, fontSize: 12),
+                ),
+                SizedBox(height: 8),
+                Text("Total de Fotos: ${images.length}",
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                Text("EPCs escaneados: ${epcs.length}",
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text("Cancelar"),
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        uploadData();
                       },
+                      child: Text("Confirmar"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFF46707E),
+                        foregroundColor: Colors.white,
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 16),
-
-                  // Botones
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      ElevatedButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: Text("Cancelar"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          uploadData();
-                        },
-                        child: Text("Confirmar"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Color(0xFF46707E),
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ],
-                  )
-                ],
-              ),
+                  ],
+                )
+              ],
             ),
           ),
         );
@@ -273,251 +449,465 @@ class _ScanAndCaptureState extends State<ScanAndCapture> {
     );
   }
 
-  Future<void> uploadData() async {
-    if (epcs.isEmpty) {
-      _showSnackBar("No hay EPCs para subir.");
-      return;
-    }
-
-    setState(() {
-      isUploading = true;
-    });
-
-    try {
-      final url =
-          Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create");
-      final request = http.MultipartRequest('POST', url);
-
-      // Agregar campos al request
-      request.fields['Fecha'] = fechaController.text;
-      request.fields['NombreOperador'] = operadorController.text;
-      request.fields['NumeroLogistica'] = noLogisticaController.text;
-      request.fields['Observaciones'] = observacionesController.text;
-      request.fields['FechaCreacion'] = DateTime.now().toIso8601String();
-      request.fields['Dispositivo'] = "Dispositivo Zebra 123";
-
-      // Enviar cada EPC como un valor separado para el campo ListaEPCs
-      // Enviar cada EPC como un valor separado para el campo ListaEPCs
-      final epcList =
-          epcs.map((epc) => epc['epc']).toList(); // Extrae solo los EPCs
-      request.fields['ListaEPCs'] = jsonEncode(epcList);
-
-      // Comprimir imágenes y añadirlas al request
-      for (var image in images) {
-        final compressedImage = await compressImage(image);
-        if (compressedImage != null) {
-          request.files.add(await http.MultipartFile.fromPath(
-            'Fotos',
-            compressedImage.path,
-          ));
-        } else {
-          print("No se pudo comprimir la imagen: ${image.path}");
-        }
-      }
-
-      // Enviar solicitud
-      final response = await request.send();
-
-      if (response.statusCode == 200) {
-        _showSnackBar("Datos subidos exitosamente.");
-        setState(() {
-          epcs.clear();
-          images.clear();
-        });
-      } else {
-        final responseBody = await response.stream.bytesToString();
-        print("Error al subir los datos. Código: ${response.statusCode}");
-        print("Detalles del error: $responseBody");
-        _showSnackBar("Error al subir los datos.");
-      }
-    } catch (e) {
-      print("Error de conexión o al procesar la solicitud: $e");
-      _showSnackBar("Error de conexión al servidor.");
-    } finally {
-      setState(() {
-        isUploading = false;
-      });
-    }
+  void _showErrorDialog(String title, String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text(title, style: TextStyle(color: Colors.red)),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text("Cerrar"),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSnackBar(String message) {
-    final snackBar = SnackBar(
-      content: Text(
-        message,
-        style: TextStyle(color: Colors.white),
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: Duration(seconds: 2),
+        backgroundColor: Colors.teal,
       ),
-      backgroundColor: Colors.teal,
-      duration: Duration(seconds: 2),
     );
-    ScaffoldMessenger.of(context).showSnackBar(snackBar);
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _enableScanner();
-  }
-
-  @override
-  void dispose() {
-    _disableScanner();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ElevatedButton.icon(
-                onPressed: startScanning,
-                icon: Icon(Icons.qr_code_scanner),
-                label: Text("Escanear EPC"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(0xFF46707E),
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+        child: Column(
+          children: [
+            // Top action bar
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 2,
                   ),
-                ),
+                ],
               ),
-              SizedBox(height: 20),
-              // Lista de EPCs ajustada automáticamente
-              Expanded(
-                flex: 2,
-                child: ListView.builder(
-                  itemCount: epcs.length,
-                  itemBuilder: (context, index) {
-                    final epc = epcs[index];
-                    return Card(
-                      margin: EdgeInsets.symmetric(vertical: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("RFID: ${epc['epc']}",
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 14)),
-                            Text("Clave Producto: ${epc['claveProducto']}"),
-                            Text("Nombre Producto: ${epc['nombreProducto']}"),
-                            Text("Peso Neto: ${epc['pesoNeto']}"),
-                            Text("Piezas: ${epc['piezas']}"),
-                            Text("Trazabilidad: ${epc['trazabilidad']}"),
-                          ],
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: ElevatedButton.icon(
+                          onPressed: () => startScanning(),
+                          icon: Icon(Icons.qr_code_scanner),
+                          label: Text("Escanear EPC"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF46707E),
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                          ),
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(height: 20),
-              // Lista de imágenes ajustada automáticamente
-              Expanded(
-                flex: 1,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: images
-                        .map((image) => GestureDetector(
-                              onTap: () {
-                                _showImagePreview(image);
-                              },
-                              child: Stack(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 6.0),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Image.file(image,
-                                          width: 120,
-                                          height: 120,
-                                          fit: BoxFit.cover),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: 5,
-                                    top: 5,
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          images.remove(image);
-                                        });
-                                      },
-                                      child: Icon(Icons.close,
-                                          color: Colors.red, size: 20),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ))
-                        .toList(),
+                    ],
                   ),
-                ),
+                  SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildCounter("EPCs", epcs.length, Icons.list_alt),
+                      _buildCounter(
+                          "Fotos", images.length, Icons.photo_library),
+                    ],
+                  ),
+                ],
               ),
-              SizedBox(height: 20),
-              // Botones para tomar foto y subir datos
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: captureImage,
-                    icon: Icon(Icons.camera_alt),
-                    label: Text(
-                      "Tomar Foto",
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF46707E),
-                      foregroundColor: Colors.white,
+            ),
+
+            // Scrollable content area
+            Expanded(
+              child: SingleChildScrollView(
+                // Add this to prevent overflow
+                child: Column(
+                  children: [
+                    // EPCs list
+                    Container(
                       padding:
-                          EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: epcs.isEmpty
+                          ? _buildEmptyState(
+                              "No hay EPCs escaneados", Icons.qr_code)
+                          : Column(
+                              children: epcs
+                                  .asMap()
+                                  .entries
+                                  .map((entry) =>
+                                      _buildEPCCard(entry.value, entry.key))
+                                  .toList(),
+                            ),
+                    ),
+
+                    // Image gallery
+                    SizedBox(
+                      height: 140,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: images.isEmpty
+                            ? _buildEmptyState(
+                                "No hay fotos", Icons.photo_library)
+                            : ListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: images.length,
+                                itemBuilder: (context, index) =>
+                                    _buildImageCard(images[index], index),
+                              ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Panel inferior con botones de acción
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 2,
+                    offset: Offset(0, -2),
                   ),
-                  ElevatedButton(
-                    onPressed:
-                        isUploading ? null : _showUploadConfirmationModal,
-                    child: isUploading
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2),
-                          )
-                        : Text(
-                            "Subir Datos",
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min, // Add this
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: captureImage,
+                          icon: Icon(Icons.camera_alt),
+                          label: Text("Tomar Foto"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF46707E),
+                            padding: EdgeInsets.symmetric(vertical: 12),
                           ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF4CAF50),
-                      foregroundColor: Colors.white,
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: selectFromGallery,
+                          icon: Icon(Icons.photo_library),
+                          label: Text("Galería"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF46707E),
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _confirmDelete("fotos"),
+                          icon: Icon(Icons.delete_outline),
+                          label: Text("Eliminar Fotos"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: BorderSide(color: Colors.red),
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _confirmDelete("epcs"),
+                          icon: Icon(Icons.delete_outline),
+                          label: Text("Eliminar EPCs"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: BorderSide(color: Colors.red),
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          isUploading ? null : _showUploadConfirmationModal,
+                      icon: isUploading
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : Icon(Icons.cloud_upload),
+                      label: Text(
+                        isUploading ? "Subiendo..." : "Subir Datos",
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFF4CAF50),
+                        padding: EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
+    );
+  }
+
+// Widget para mostrar contadores
+  Widget _buildCounter(String label, int count, IconData icon) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Color(0xFF46707E).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20, color: Color(0xFF46707E)),
+          SizedBox(width: 8),
+          Text(
+            "$label: $count",
+            style: TextStyle(
+              color: Color(0xFF46707E),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+// Widget para estados vacíos
+  Widget _buildEmptyState(String message, IconData icon) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            icon,
+            size: 48,
+            color: Colors.grey.shade400,
+          ),
+          SizedBox(height: 16),
+          Text(
+            message,
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 16,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+// Widget para tarjetas de EPC
+  Widget _buildEPCCard(Map<String, dynamic> epc, int index) {
+    return Card(
+      margin: EdgeInsets.only(bottom: 8),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Color(0xFF46707E).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${index + 1}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF46707E),
+                ),
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "EPC: ${epc['epc']}",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 4),
+                  Text("Clave Producto: ${epc['claveProducto']}"),
+                  Text("Producto: ${epc['nombreProducto']}"),
+                  Text("Peso: ${epc['pesoNeto']} kg"),
+                  Text("Piezas: ${epc['piezas']}"),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: Icon(Icons.delete_outline, color: Colors.red),
+              onPressed: () {
+                setState(() {
+                  epcs.removeAt(index);
+                });
+                _showSnackBar("EPC eliminado");
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// Widget para tarjetas de imagen
+  Widget _buildImageCard(File image, int index) {
+    return Container(
+      width: 120,
+      margin: EdgeInsets.only(right: 8),
+      child: Stack(
+        children: [
+          Card(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 2,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                image,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          Positioned(
+            top: 4,
+            right: 4,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: Icon(Icons.close, color: Colors.white, size: 20),
+                onPressed: () {
+                  setState(() {
+                    images.removeAt(index);
+                  });
+                  _showSnackBar("Imagen eliminada");
+                },
+                padding: EdgeInsets.all(4),
+                constraints: BoxConstraints(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showImagePreview(File image) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          child: Stack(
+            children: [
+              Image.file(
+                image,
+                fit: BoxFit.contain,
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    padding: EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.close, color: Colors.white, size: 30),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _confirmDelete(String type) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            type == "fotos"
+                ? "¿Eliminar todas las fotos?"
+                : "¿Eliminar todos los EPCs?",
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            type == "fotos"
+                ? "Esto eliminará todas las fotos capturadas. ¿Desea continuar?"
+                : "Esto eliminará todos los EPCs escaneados. ¿Desea continuar?",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text("Cancelar"),
+            ),
+            TextButton(
+              onPressed: () {
+                if (type == "fotos") {
+                  setState(() => images.clear());
+                  _showSnackBar("Todas las fotos eliminadas");
+                } else {
+                  setState(() => epcs.clear());
+                  _showSnackBar("Todos los EPCs eliminados");
+                }
+                Navigator.of(context).pop();
+              },
+              child: Text("Eliminar"),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+            ),
+          ],
+        );
+      },
     );
   }
 }
