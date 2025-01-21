@@ -5,19 +5,22 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 class MaterialSeparationWidget extends StatefulWidget {
+  final GlobalKey<State<MaterialSeparationWidget>> materialKey;
+
   final Map<String, dynamic> registro;
 
   const MaterialSeparationWidget({
-    Key? key,
+    super.key,
     required this.registro,
-  }) : super(key: key);
+    required this.materialKey,
+  });
 
   @override
-  _MaterialSeparationWidgetState createState() =>
-      _MaterialSeparationWidgetState();
+  MaterialSeparationWidgetState createState() =>
+      MaterialSeparationWidgetState();
 }
 
-class _MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
+class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
   Set<String> epcsEscaneados = {};
   List<Map<String, dynamic>> tarimasEscaneadas = [];
   double cantidadProgramada = 0;
@@ -27,10 +30,17 @@ class _MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
   String? errorMessage;
   TextEditingController _epcController = TextEditingController();
 
+  // Getter público para acceder a los EPCs
+  Set<String> get scannedEpcs => epcsEscaneados;
+
   @override
   void initState() {
     super.initState();
     _inicializarCantidades();
+  }
+
+  Set<String> getScannedEpcs() {
+    return epcsEscaneados;
   }
 
   @override

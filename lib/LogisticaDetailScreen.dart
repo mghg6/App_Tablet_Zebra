@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:zebra_scanner_app/modals/quality_review_modal.dart';
 import 'dart:convert';
-
 import 'package:zebra_scanner_app/widgets/material_separation.dart';
 
 class LogisticaDetailScreen extends StatefulWidget {
   final int noLogistica;
+  final Map<int, GlobalKey<MaterialSeparationWidgetState>> _materialKeys = {};
 
-  const LogisticaDetailScreen({Key? key, required this.noLogistica})
-      : super(key: key);
+  LogisticaDetailScreen({
+    Key? key,
+    required this.noLogistica,
+  }) : super(key: key);
 
   @override
   _LogisticaDetailScreenState createState() => _LogisticaDetailScreenState();
@@ -85,10 +88,11 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
   Future<void> _fetchLogisticaDetail() async {
     try {
       setState(() => isLoading = true);
+
       final response = await http
           .get(Uri.parse(
               'http://172.16.10.31/api/Logistica/${widget.noLogistica}'))
-          .timeout(Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
 
       if (!mounted) return;
 
@@ -99,6 +103,15 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
           registros = data['registros'] ?? [];
           ubicacionesSeleccionadas =
               List<String?>.filled(registros.length, null);
+
+          // Inicializar las keys para cada registro
+          for (var i = 0; i < registros.length; i++) {
+            if (!widget._materialKeys.containsKey(i)) {
+              widget._materialKeys[i] =
+                  GlobalKey<MaterialSeparationWidgetState>();
+            }
+          }
+
           isLoading = false;
           errorMessage = null;
         });
@@ -122,7 +135,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
         content: Text(message),
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 3),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
@@ -135,20 +148,20 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
     return Row(
       children: [
         Icon(icon, color: Colors.white70, size: 20),
-        SizedBox(width: 10),
+        const SizedBox(width: 10),
         Text(
           '$title:',
-          style: TextStyle(
+          style: const TextStyle(
             color: Colors.white70,
             fontSize: 16,
             fontWeight: FontWeight.bold,
           ),
         ),
-        SizedBox(width: 10),
+        const SizedBox(width: 10),
         Expanded(
           child: Text(
             _safeToString(value),
-            style: TextStyle(
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 16,
             ),
@@ -159,14 +172,45 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
     );
   }
 
+  void _showQualityReviewModal() {
+    List<String> scannedEpcs = [];
+
+    // Recolectar EPCs de todos los widgets MaterialSeparation
+    widget._materialKeys.forEach((index, key) {
+      if (key.currentState != null) {
+        scannedEpcs.addAll(key.currentState!.getScannedEpcs());
+      }
+    });
+
+    if (scannedEpcs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay EPCs escaneados para procesar'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return QualityReviewModal(
+          scannedEpcs: scannedEpcs,
+          noLogistica: widget.noLogistica, // Pasamos el número de logística
+        );
+      },
+    );
+  }
+
   Widget _buildHeader() {
-    Color baseColor = Color(0xFF85B6C4);
+    const Color baseColor = Color(0xFF85B6C4);
     Color statusColor =
         _getCardColor(logisticaDetail?['semaforo']?.toString() ?? '');
 
     return Container(
-      margin: EdgeInsets.all(10),
-      padding: EdgeInsets.all(20),
+      margin: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: baseColor,
         borderRadius: BorderRadius.circular(15),
@@ -174,7 +218,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
           BoxShadow(
             color: baseColor.withOpacity(0.2),
             blurRadius: 10,
-            offset: Offset(0, 5),
+            offset: const Offset(0, 5),
           ),
         ],
       ),
@@ -186,11 +230,12 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.local_shipping, color: Colors.white, size: 28),
-                  SizedBox(width: 10),
+                  const Icon(Icons.local_shipping,
+                      color: Colors.white, size: 28),
+                  const SizedBox(width: 10),
                   Text(
                     'Logística ${_safeToString(logisticaDetail?['nO_LOGISTICA'])}',
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
@@ -200,14 +245,14 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
               ),
             ],
           ),
-          Divider(color: Colors.white54, thickness: 1, height: 20),
-          SizedBox(height: 10),
+          const Divider(color: Colors.white54, thickness: 1, height: 20),
+          const SizedBox(height: 10),
           _buildHeaderInfo(
             'Cliente',
             logisticaDetail?['cliente'],
             Icons.person,
           ),
-          SizedBox(height: 10),
+          const SizedBox(height: 10),
           _buildHeaderInfo(
             'Fecha Programada',
             logisticaDetail?['fechaProg']?.toString().split(' ')[0],
@@ -218,18 +263,21 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
     );
   }
 
-// Modifica el método _buildRegistroItem:
   Widget _buildRegistroItem(dynamic registro, int index) {
-    // Obtener el color basado en el estatus
+    // Asegurarnos de que existe una key para este índice
+    if (!widget._materialKeys.containsKey(index)) {
+      widget._materialKeys[index] = GlobalKey<MaterialSeparationWidgetState>();
+    }
+
     Color statusColor = _getCardColor(registro['semaforo']?.toString() ?? '');
     String estatus = _safeToString(registro['estatus2']);
 
     return Container(
-      margin: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Column(
         children: [
           Container(
-            padding: EdgeInsets.all(15),
+            padding: const EdgeInsets.all(15),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
@@ -238,7 +286,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                 BoxShadow(
                   color: statusColor.withOpacity(0.2),
                   blurRadius: 5,
-                  offset: Offset(0, 3),
+                  offset: const Offset(0, 3),
                 ),
               ],
             ),
@@ -259,11 +307,11 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-                          SizedBox(width: 8),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _safeToString(registro['producto']),
-                              style: TextStyle(
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.black87,
@@ -275,7 +323,8 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                       ),
                     ),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: statusColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(4),
@@ -292,7 +341,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                     ),
                   ],
                 ),
-                SizedBox(height: 10),
+                const SizedBox(height: 10),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -324,7 +373,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                       ),
                     ),
                     Container(
-                      padding: EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: statusColor.withOpacity(0.05),
                         borderRadius: BorderRadius.circular(8),
@@ -341,7 +390,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          SizedBox(height: 4),
+                          const SizedBox(height: 4),
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -353,7 +402,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                                   shape: BoxShape.circle,
                                 ),
                               ),
-                              SizedBox(width: 6),
+                              const SizedBox(width: 6),
                               Text(
                                 estatus,
                                 style: TextStyle(
@@ -369,12 +418,16 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                     ),
                   ],
                 ),
-                SizedBox(height: 15),
+                const SizedBox(height: 15),
                 _buildUbicacionDropdownWithColor(index, statusColor),
               ],
             ),
           ),
-          MaterialSeparationWidget(registro: registro),
+          MaterialSeparationWidget(
+            key: widget._materialKeys[index],
+            registro: registro,
+            materialKey: widget._materialKeys[index]!,
+          ),
         ],
       ),
     );
@@ -382,7 +435,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
 
   Widget _buildInfoRowWithColor(String label, dynamic value, Color color) {
     return Padding(
-      padding: EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.only(bottom: 5),
       child: Row(
         children: [
           Text(
@@ -393,11 +446,11 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
               fontWeight: FontWeight.w500,
             ),
           ),
-          SizedBox(width: 5),
+          const SizedBox(width: 5),
           Expanded(
             child: Text(
               _safeToString(value),
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 14,
                 color: Colors.black87,
               ),
@@ -415,7 +468,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
         border: Border.all(color: color.withOpacity(0.5)),
         borderRadius: BorderRadius.circular(8),
       ),
-      padding: EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: ubicacionesSeleccionadas[index],
@@ -433,47 +486,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
               value: ubicacion,
               child: Text(
                 ubicacion,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.black87,
-                ),
-              ),
-            );
-          }).toList(),
-          onChanged: (value) {
-            setState(() {
-              ubicacionesSeleccionadas[index] = value;
-            });
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUbicacionDropdown(int index) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: EdgeInsets.symmetric(horizontal: 12),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: ubicacionesSeleccionadas[index],
-          hint: Text(
-            'Seleccionar ubicación',
-            style: TextStyle(
-              color: Colors.blueGrey,
-              fontSize: 14,
-            ),
-          ),
-          isExpanded: true,
-          items: ubicaciones.map((ubicacion) {
-            return DropdownMenuItem<String>(
-              value: ubicacion,
-              child: Text(
-                ubicacion,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 14,
                   color: Colors.black87,
                 ),
@@ -501,13 +514,23 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh),
             onPressed: _fetchLogisticaDetail,
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showQualityReviewModal,
+        label: const Text(
+          'Revisión de Calidad',
+          style: TextStyle(color: Colors.white),
+        ),
+        icon: const Icon(Icons.fact_check),
+        backgroundColor: Theme.of(context).primaryColor,
+        foregroundColor: Colors.white,
+      ),
       body: isLoading
-          ? Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator())
           : errorMessage != null
               ? Center(
                   child: Column(
@@ -516,12 +539,12 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                       Text(
                         errorMessage!,
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.red),
+                        style: const TextStyle(color: Colors.red),
                       ),
-                      SizedBox(height: 20),
+                      const SizedBox(height: 20),
                       ElevatedButton(
                         onPressed: _fetchLogisticaDetail,
-                        child: Text('Reintentar'),
+                        child: const Text('Reintentar'),
                       ),
                     ],
                   ),
@@ -531,7 +554,7 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
                     _buildHeader(),
                     Expanded(
                       child: registros.isEmpty
-                          ? Center(
+                          ? const Center(
                               child: Text(
                                 "No hay registros disponibles",
                                 style: TextStyle(

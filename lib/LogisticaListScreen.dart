@@ -285,51 +285,63 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
                 // Información Principal
                 Container(
-                  padding: EdgeInsets.all(16),
+                  padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: baseColor.withOpacity(0.2),
+                      color: Colors.grey[200]!,
                       width: 1,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: baseColor.withOpacity(0.05),
+                        color: Colors.black.withOpacity(0.05),
                         spreadRadius: 1,
                         blurRadius: 5,
                         offset: Offset(0, 2),
                       ),
                     ],
                   ),
-                  child: Column(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildMainInfoItem(
-                        Icons.business,
-                        'Cliente',
-                        _safeToString(logistica['cliente']),
-                        baseColor,
+                      // Primera columna - Cliente
+                      Expanded(
+                        child: _buildColumnInfoItem(
+                          Icons.business,
+                          'Cliente',
+                          _safeToString(logistica['cliente']),
+                          Colors.indigo, // Color principal para Cliente
+                        ),
                       ),
-                      Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Divider(color: baseColor.withOpacity(0.1)),
+                      // Separador vertical
+                      VerticalDivider(
+                        color: Colors.grey[200],
+                        width: 20,
                       ),
-                      _buildMainInfoItem(
-                        Icons.person_outline,
-                        'Aux Ventas',
-                        _safeToString(logistica['auxVentas']),
-                        baseColor,
+                      // Segunda columna - Aux Ventas
+                      Expanded(
+                        child: _buildColumnInfoItem(
+                          Icons.person_outline,
+                          'Aux Ventas',
+                          _safeToString(logistica['auxVentas']),
+                          Colors.teal, // Color principal para Aux Ventas
+                        ),
                       ),
-                      Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Divider(color: baseColor.withOpacity(0.1)),
+                      // Separador vertical
+                      VerticalDivider(
+                        color: Colors.grey[200],
+                        width: 20,
                       ),
-                      _buildMainInfoItem(
-                        Icons.calendar_today_outlined,
-                        'Programado',
-                        logistica['fechaProg']?.toString().split(' ')[0] ??
-                            'N/A',
-                        baseColor,
+                      // Tercera columna - Programado
+                      Expanded(
+                        child: _buildColumnInfoItem(
+                          Icons.calendar_today_outlined,
+                          'Programado',
+                          logistica['fechaProg']?.toString().split(' ')[0] ??
+                              'N/A',
+                          Colors.deepPurple, // Color principal para Programado
+                        ),
                       ),
                     ],
                   ),
@@ -375,6 +387,60 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildColumnInfoItem(
+      IconData icon, String label, String value, Color baseColor) {
+    return Container(
+      padding: EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: baseColor.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: baseColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Icon(
+                  icon,
+                  size: 16,
+                  color: baseColor,
+                ),
+              ),
+              SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: baseColor.shade700,
+              height: 1.2,
+            ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+          ),
+        ],
       ),
     );
   }
@@ -610,6 +676,36 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
               Container(
                 padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.blue.withOpacity(0.2),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.compare_arrows,
+                      color: Colors.blue[700],
+                      size: 16,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      'Diferencia: ${_safeToString(detalle['diferencia'])}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.blue[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
                   color:
                       (isFalta ? Colors.orange : Colors.green).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
@@ -676,7 +772,6 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Logísticas'),
         actions: [
           // Filtro Aux Ventas
           PopupMenuButton<String>(
@@ -917,4 +1012,8 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       ),
     );
   }
+}
+
+extension on Color {
+  get shade700 => null;
 }

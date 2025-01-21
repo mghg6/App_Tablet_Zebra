@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path_provider/path_provider.dart';
+import 'dart:math' as math;
 
 class ScanAndCapture extends StatefulWidget {
   @override
@@ -122,7 +123,7 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
   Future<void> selectFromGallery() async {
     try {
       final List<XFile> selectedImages = await _imagePicker.pickMultiImage(
-        imageQuality: 50,
+        imageQuality: 85, // Aumentamos la calidad
       );
 
       if (selectedImages.isNotEmpty && mounted) {
@@ -134,7 +135,6 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
             setState(() {
               images.add(optimizedImage);
             });
-            // Limpiar imagen original
             if (await originalImage.exists()) {
               await originalImage.delete();
             }
@@ -143,9 +143,7 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
         _showSnackBar("${selectedImages.length} imágenes agregadas");
       }
     } catch (e) {
-      if (mounted) {
-        _showSnackBar("Error al cargar imágenes: ${e.toString()}");
-      }
+      if (mounted) _showSnackBar("Error al cargar imágenes: ${e.toString()}");
     }
   }
 
@@ -188,9 +186,10 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     try {
       final XFile? pickedFile = await _imagePicker.pickImage(
         source: ImageSource.camera,
-        imageQuality: 50,
-        maxWidth: 1024,
-        maxHeight: 768,
+        imageQuality: 85, // Aumentamos la calidad de 50 a 85
+        maxWidth: 2048, // Aumentamos el ancho máximo para mejor calidad
+        maxHeight:
+            1536, // Aumentamos el alto máximo manteniendo la relación 4:3
       );
 
       if (pickedFile != null && mounted) {
@@ -201,7 +200,6 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           setState(() {
             images.add(optimizedImage);
           });
-          // Cleanup original image
           if (await originalImage.exists()) {
             await originalImage.delete();
           }
@@ -219,12 +217,32 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       final targetPath =
           '${directory.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
 
+      // Obtenemos las dimensiones de la imagen original
+      final decodedImage =
+          await decodeImageFromList(await originalImage.readAsBytes());
+      double width = decodedImage.width.toDouble();
+      double height = decodedImage.height.toDouble();
+
+      // Calculamos las nuevas dimensiones manteniendo el aspecto
+      double maxDimension = 2048.0; // Máxima dimensión permitida
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+      }
+
       final result = await FlutterImageCompress.compressAndGetFile(
         originalImage.path,
         targetPath,
-        quality: 50,
+        quality: 85, // Calidad más alta
         format: CompressFormat.jpeg,
-        keepExif: false,
+        minWidth: width.round(),
+        minHeight: height.round(),
+        keepExif: true, // Mantener metadatos EXIF
       );
 
       if (result == null) throw Exception('Fallo en la optimización de imagen');
@@ -562,8 +580,17 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                             : ListView.builder(
                                 scrollDirection: Axis.horizontal,
                                 itemCount: images.length,
-                                itemBuilder: (context, index) =>
-                                    _buildImageCard(images[index], index),
+                                // Agregamos caching para mejorar el rendimiento
+                                cacheExtent: 1000, // Cache más imágenes
+                                itemBuilder: (context, index) {
+                                  // Usar Image.memory con caching
+                                  return LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      return _buildImageCard(
+                                          images[index], index);
+                                    },
+                                  );
+                                },
                               ),
                       ),
                     ),
@@ -789,6 +816,54 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     );
   }
 
+  // Agregar estas variables en la clase
+  static const int _itemsPerPage = 20;
+  int _currentPage = 0;
+
+// Modificar la lista de EPCs para usar paginación
+  Widget _buildEPCsList() {
+    if (epcs.isEmpty) {
+      return _buildEmptyState("No hay EPCs escaneados", Icons.qr_code);
+    }
+
+    final int start = _currentPage * _itemsPerPage;
+    final int end = math.min(start + _itemsPerPage, epcs.length);
+    final List<Map<String, dynamic>> pageItems = epcs.sublist(start, end);
+
+    return Column(
+      children: [
+        ...pageItems
+            .asMap()
+            .entries
+            .map((entry) => _buildEPCCard(entry.value, start + entry.key))
+            .toList(),
+        if (epcs.length > _itemsPerPage)
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: Icon(Icons.chevron_left),
+                  onPressed: _currentPage > 0
+                      ? () => setState(() => _currentPage--)
+                      : null,
+                ),
+                Text(
+                    '${_currentPage + 1}/${(epcs.length / _itemsPerPage).ceil()}'),
+                IconButton(
+                  icon: Icon(Icons.chevron_right),
+                  onPressed: (start + _itemsPerPage) < epcs.length
+                      ? () => setState(() => _currentPage++)
+                      : null,
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
 // Widget para tarjetas de imagen
   Widget _buildImageCard(File image, int index) {
     return Container(
@@ -808,6 +883,9 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                 width: double.infinity,
                 height: double.infinity,
                 fit: BoxFit.cover,
+                cacheWidth: 240, // Cache del doble del tamaño mostrado
+                cacheHeight:
+                    240, // Para mejor calidad en pantallas de alta densidad
               ),
             ),
           ),
