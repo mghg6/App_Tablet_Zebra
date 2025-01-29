@@ -1,12 +1,9 @@
-// material_separation.dart
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 class MaterialSeparationWidget extends StatefulWidget {
-  final GlobalKey<State<MaterialSeparationWidget>> materialKey;
-
+  final GlobalKey<MaterialSeparationWidgetState> materialKey;
   final Map<String, dynamic> registro;
 
   const MaterialSeparationWidget({
@@ -21,38 +18,85 @@ class MaterialSeparationWidget extends StatefulWidget {
 }
 
 class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
-  Set<String> epcsEscaneados = {};
-  List<Map<String, dynamic>> tarimasEscaneadas = [];
+  // Almacenamiento estático global para mantener datos entre instancias
+  static final Map<String, Set<String>> _globalEpcsEscaneados = {};
+  static final Map<String, List<Map<String, dynamic>>>
+      _globalTarimasEscaneadas = {};
+  static final Map<String, double> _globalCantidadesSeparadas = {};
+
+  // Nuevo mapa para mantener todos los EPCs
+  static final Map<String, Set<String>> _allEpcsMap = {};
+
+  // Variables de estado locales
+  late Set<String> epcsEscaneados;
+  late List<Map<String, dynamic>> tarimasEscaneadas;
   double cantidadProgramada = 0;
   double cantidadPendiente = 0;
-  double cantidadSeparada = 0;
+  late double cantidadSeparada;
   bool isLoading = false;
   String? errorMessage;
-  TextEditingController _epcController = TextEditingController();
+  final TextEditingController _epcController = TextEditingController();
 
-  // Getter público para acceder a los EPCs
-  Set<String> get scannedEpcs => epcsEscaneados;
+  // Getter para la clave única del producto
+  String get _productKey =>
+      '${widget.registro['itemCode']}_${widget.registro['pedido']}';
+
+  // Método estático para obtener todos los EPCs
+  static List<String> getAllEpcs() {
+    return _allEpcsMap.values.expand((epcs) => epcs).toList();
+  }
+
+  static void resetAllData() {
+    _globalEpcsEscaneados.clear();
+    _globalTarimasEscaneadas.clear();
+    _globalCantidadesSeparadas.clear();
+    _allEpcsMap.clear();
+  }
+
+  // Agregar este método de instancia para resetear el estado local
+  void resetLocalData() {
+    setState(() {
+      epcsEscaneados.clear();
+      tarimasEscaneadas.clear();
+      cantidadSeparada = 0;
+      cantidadPendiente = cantidadProgramada;
+      _epcController.clear();
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _inicializarCantidades();
+    _inicializarDatosGuardados();
   }
 
-  Set<String> getScannedEpcs() {
-    return epcsEscaneados;
-  }
+  void _inicializarDatosGuardados() {
+    final productKey = _productKey;
 
-  @override
-  void dispose() {
-    _epcController.dispose();
-    super.dispose();
+    // Inicializar las estructuras globales si no existen
+    _globalEpcsEscaneados[productKey] ??= {};
+    _globalTarimasEscaneadas[productKey] ??= [];
+    _globalCantidadesSeparadas[productKey] ??= 0.0;
+    _allEpcsMap[productKey] ??= {};
+
+    // Asignar valores locales desde el almacenamiento global
+    setState(() {
+      epcsEscaneados = _globalEpcsEscaneados[productKey]!;
+      tarimasEscaneadas = List.from(_globalTarimasEscaneadas[productKey]!);
+      cantidadSeparada = _globalCantidadesSeparadas[productKey]!;
+      cantidadPendiente = cantidadProgramada - cantidadSeparada;
+    });
   }
 
   void _inicializarCantidades() {
     cantidadProgramada =
         double.tryParse(widget.registro['programado']?.toString() ?? '0') ?? 0;
     cantidadPendiente = cantidadProgramada;
+  }
+
+  Set<String> getScannedEpcs() {
+    return epcsEscaneados;
   }
 
   String _formatearQRaEPC(String codigoQR) {
@@ -71,7 +115,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
 
     try {
       String epc = _formatearQRaEPC(codigo);
-      print('EPC formateado: $epc'); // Debug
+      print('EPC formateado: $epc');
 
       final response = await http
           .get(Uri.parse('http://172.16.10.31/api/Socket/$epc'))
@@ -81,24 +125,17 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        print('Datos recibidos del EPC: $data'); // Debug
-        print('Datos de la logística: ${widget.registro}'); // Debug
+        print('Datos recibidos del EPC: $data');
+        print('Datos de la logística: ${widget.registro}');
 
-        // Obtener y normalizar los códigos
         String claveProductoTarima =
             (data['claveProducto'] ?? '').toString().trim().toUpperCase();
         String itemCodeLogistica =
             (widget.registro['itemCode'] ?? '').toString().trim().toUpperCase();
 
-        print(
-            'Comparando - claveProducto Tarima: $claveProductoTarima con itemCode Logística: $itemCodeLogistica'); // Debug
-
-        // Comparar claveProducto del EPC con itemCode de la logística
         if (claveProductoTarima == itemCodeLogistica) {
-          print('Coincidencia encontrada. Procesando tarima...'); // Debug
           _procesarTarima(epc, data);
         } else {
-          print('No coinciden los códigos'); // Debug
           _mostrarError(
               'El producto de la tarima ($claveProductoTarima) no coincide con el solicitado ($itemCodeLogistica)');
         }
@@ -118,19 +155,15 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
     if (!epcsEscaneados.contains(epc)) {
       final unidadLogistica = widget.registro['unidad'];
       double cantidadTarima = 0;
-      print('Procesando tarima - Unidad logística: $unidadLogistica');
 
-      // Calcular el límite máximo permitido (120% de la cantidad programada)
       double limiteSuperior = cantidadProgramada * 1.20;
 
       if (unidadLogistica == 'KGM') {
         cantidadTarima =
             double.tryParse(tarimaData['pesoNeto']?.toString() ?? '0') ?? 0;
-        print('Usando peso neto: $cantidadTarima kg');
       } else if (['H87', 'XBX', 'MIL'].contains(unidadLogistica)) {
         cantidadTarima =
             double.tryParse(tarimaData['piezas']?.toString() ?? '0') ?? 0;
-        print('Usando piezas: $cantidadTarima pzs');
       }
 
       if (cantidadTarima <= 0) {
@@ -138,11 +171,11 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
         return;
       }
 
-      // Verificar si al agregar la nueva tarima excedería el límite del 120%
       double cantidadTotalPotencial = cantidadSeparada + cantidadTarima;
 
       if (cantidadTotalPotencial <= limiteSuperior) {
         setState(() {
+          // Actualizar estado local
           epcsEscaneados.add(epc);
           tarimasEscaneadas.add({
             ...tarimaData,
@@ -152,13 +185,20 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
           });
           cantidadPendiente -= cantidadTarima;
           cantidadSeparada += cantidadTarima;
+
+          // Actualizar almacenamiento global
+          final productKey = _productKey;
+          _globalEpcsEscaneados[productKey]!.add(epc);
+          _globalTarimasEscaneadas[productKey] = List.from(tarimasEscaneadas);
+          _globalCantidadesSeparadas[productKey] = cantidadSeparada;
+          _allEpcsMap[productKey]!.add(epc);
         });
+
         _epcController.clear();
 
-        // Mostrar advertencia si supera el 100% pero está dentro del 120%
         if (cantidadTotalPotencial > cantidadProgramada) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
+            const SnackBar(
               content: Text(
                   'Advertencia: Se ha superado la cantidad programada pero está dentro del límite permitido del 20%'),
               backgroundColor: Colors.orange,
@@ -189,13 +229,13 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
 
   Widget _buildEscanerInput() {
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
           Expanded(
             child: TextField(
               controller: _epcController,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'Escanear QR/Código de Tarima',
                 border: OutlineInputBorder(),
                 contentPadding:
@@ -205,11 +245,9 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
               ),
               onChanged: (value) {
                 if (value.isNotEmpty) {
-                  // Obtener solo los números hasta el primer espacio
                   String processedValue =
                       value.split(' ')[0].replaceAll(RegExp(r'[^0-9]'), '');
 
-                  // Si el valor procesado es diferente al valor actual, actualizar el controller
                   if (processedValue != value) {
                     _epcController.value = TextEditingValue(
                       text: processedValue,
@@ -218,7 +256,6 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                     );
                   }
 
-                  // Verificar si ya alcanzó los 16 dígitos
                   if (processedValue.length >= 16) {
                     _fetchTarimaData(processedValue);
                   }
@@ -235,9 +272,9 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
               },
             ),
           ),
-          SizedBox(width: 8),
+          const SizedBox(width: 8),
           IconButton(
-            icon: Icon(Icons.qr_code_scanner),
+            icon: const Icon(Icons.qr_code_scanner),
             onPressed: () {
               // Implementación futura del scanner
             },
@@ -252,7 +289,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
     final unidadTexto = unidad == 'KGM' ? 'kg' : 'pzs';
 
     return Container(
-      padding: EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[100],
         borderRadius: BorderRadius.circular(8),
@@ -316,11 +353,11 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
               ),
             ],
           ),
-          SizedBox(height: 12),
+          const SizedBox(height: 12),
           LinearProgressIndicator(
             value: cantidadSeparada / cantidadProgramada,
             backgroundColor: Colors.grey[300],
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
+            valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
             minHeight: 8,
           ),
         ],
@@ -342,7 +379,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
     }
 
     return Container(
-      constraints: BoxConstraints(maxHeight: 250),
+      constraints: const BoxConstraints(maxHeight: 250),
       child: ListView.builder(
         shrinkWrap: true,
         itemCount: tarimasEscaneadas.length,
@@ -354,12 +391,12 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
               : '${tarima['cantidadUsada'].toStringAsFixed(0)} pzs';
 
           return Card(
-            margin: EdgeInsets.symmetric(vertical: 4),
+            margin: const EdgeInsets.symmetric(vertical: 4),
             child: ListTile(
-              leading: Icon(Icons.check_circle, color: Colors.green),
+              leading: const Icon(Icons.check_circle, color: Colors.green),
               title: Text(
                 'EPC: ${tarima['epc']}',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -368,7 +405,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                   Text('Cantidad: $cantidad'),
                 ],
               ),
-              trailing: Container(
+              trailing: SizedBox(
                 width: 120,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -377,7 +414,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                     Flexible(
                       child: Text(
                         tarima['fechaEscaneo'].toString().split('.')[0],
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,
                         ),
@@ -388,7 +425,7 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                       height: 30,
                       width: 30,
                       child: IconButton(
-                        icon: Icon(
+                        icon: const Icon(
                           Icons.delete_outline,
                           color: Colors.red,
                           size: 20,
@@ -396,10 +433,21 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                         padding: EdgeInsets.zero,
                         onPressed: () {
                           setState(() {
+                            // Actualizar estado local
                             cantidadPendiente += tarima['cantidadUsada'];
                             cantidadSeparada -= tarima['cantidadUsada'];
                             epcsEscaneados.remove(tarima['epc']);
                             tarimasEscaneadas.removeAt(index);
+
+                            // Actualizar almacenamiento global
+                            final productKey = _productKey;
+                            _globalEpcsEscaneados[productKey]!
+                                .remove(tarima['epc']);
+                            _globalTarimasEscaneadas[productKey] =
+                                List.from(tarimasEscaneadas);
+                            _globalCantidadesSeparadas[productKey] =
+                                cantidadSeparada;
+                            _allEpcsMap[productKey]!.remove(tarima['epc']);
                           });
                         },
                       ),
@@ -417,17 +465,17 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: EdgeInsets.all(8),
+      margin: const EdgeInsets.all(8),
       elevation: 2,
       child: Padding(
-        padding: EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
+                const Text(
                   'Separación de Material',
                   style: TextStyle(
                     fontSize: 18,
@@ -435,30 +483,36 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                   ),
                 ),
                 if (isLoading)
-                  SizedBox(
+                  const SizedBox(
                     width: 24,
                     height: 24,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
               ],
             ),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
             _buildEscanerInput(),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
             _buildContador(),
-            SizedBox(height: 16),
-            Text(
+            const SizedBox(height: 16),
+            const Text(
               'Tarimas Escaneadas:',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
               ),
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             _buildListaTarimas(),
           ],
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _epcController.dispose();
+    super.dispose();
   }
 }

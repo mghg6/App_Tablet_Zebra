@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:zebra_scanner_app/LogisticaListScreen.dart';
+import 'package:zebra_scanner_app/logistics_review_screen.dart';
 import 'package:zebra_scanner_app/scanandcapture.dart';
 import 'package:zebra_scanner_app/dashboard_page.dart';
 import 'package:zebra_scanner_app/inventorygenpt.dart';
@@ -127,6 +128,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       title: 'Logísticas',
       icon: Icons.local_shipping,
       screen: LogisticaListScreen(),
+    ),
+    MenuOption(
+      title: 'Revisión de Calidad',
+      icon: Icons.assignment_turned_in, // Icono de checklist/revisión
+      screen: LogisticsReviewScreen(),
     ),
   ];
 

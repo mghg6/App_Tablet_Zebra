@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.Build
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 
@@ -13,8 +15,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        }
 
-        // Verifica que flutterEngine no sea nulo antes de configurar el canal
         flutterEngine?.dartExecutor?.binaryMessenger?.let { messenger ->
             MethodChannel(messenger, CHANNEL).setMethodCallHandler { call, result ->
                 if (call.method == "startScan") {
@@ -25,15 +29,12 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-
-        // Registro para recibir el Intent de DataWedge
         val filter = IntentFilter()
-        filter.addAction("com.zebra.scanner.RETURN_BARCODE") // La acción que configuraste en DataWedge
+        filter.addAction("com.zebra.scanner.RETURN_BARCODE")
         registerReceiver(receiver, filter)
     }
 
     private fun startScan() {
-        // Enviar comando de inicio de escaneo a DataWedge
         val intent = Intent()
         intent.action = "com.symbol.datawedge.api.ACTION"
         intent.putExtra("com.symbol.datawedge.api.SOFT_SCAN_TRIGGER", "START_SCANNING")
@@ -44,7 +45,6 @@ class MainActivity : FlutterActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.hasExtra("com.symbol.datawedge.data_string")) {
                 val barcodeData = intent.getStringExtra("com.symbol.datawedge.data_string")
-                // Verifica que flutterEngine no sea nulo antes de invocar el método
                 flutterEngine?.dartExecutor?.binaryMessenger?.let { messenger ->
                     MethodChannel(messenger, CHANNEL)
                         .invokeMethod("barcodeScanned", barcodeData)

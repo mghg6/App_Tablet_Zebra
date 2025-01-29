@@ -172,17 +172,12 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
     );
   }
 
+  // En LogisticaDetailScreen, reemplazar el método _showQualityReviewModal
+
   void _showQualityReviewModal() {
-    List<String> scannedEpcs = [];
+    List<String> allScannedEpcs = MaterialSeparationWidgetState.getAllEpcs();
 
-    // Recolectar EPCs de todos los widgets MaterialSeparation
-    widget._materialKeys.forEach((index, key) {
-      if (key.currentState != null) {
-        scannedEpcs.addAll(key.currentState!.getScannedEpcs());
-      }
-    });
-
-    if (scannedEpcs.isEmpty) {
+    if (allScannedEpcs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('No hay EPCs escaneados para procesar'),
@@ -196,11 +191,30 @@ class _LogisticaDetailScreenState extends State<LogisticaDetailScreen> {
       context: context,
       builder: (BuildContext context) {
         return QualityReviewModal(
-          scannedEpcs: scannedEpcs,
-          noLogistica: widget.noLogistica, // Pasamos el número de logística
+          scannedEpcs: allScannedEpcs,
+          noLogistica: widget.noLogistica,
+          clienteName: logisticaDetail?['cliente'] ?? 'Sin Cliente',
         );
       },
-    );
+    ).then((result) {
+      if (result == true) {
+        // El envío fue exitoso y los datos fueron limpiados
+        // Forzar actualización de todos los widgets MaterialSeparation
+        widget._materialKeys.forEach((index, key) {
+          if (key.currentState != null) {
+            key.currentState!.resetLocalData();
+          }
+        });
+
+        // Opcional: Mostrar mensaje adicional de confirmación
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Todos los datos han sido reiniciados'),
+            backgroundColor: Colors.blue,
+          ),
+        );
+      }
+    });
   }
 
   Widget _buildHeader() {
