@@ -3,6 +3,24 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+// Modelo para Ubicación
+class Ubicacion {
+  final int idUbicacion;
+  final String claveUbicacion;
+
+  Ubicacion({
+    required this.idUbicacion,
+    required this.claveUbicacion,
+  });
+
+  factory Ubicacion.fromJson(Map<String, dynamic> json) {
+    return Ubicacion(
+      idUbicacion: json['idUbicacion'],
+      claveUbicacion: json['claveUbicacion'],
+    );
+  }
+}
+
 class InventoryGenPT extends StatefulWidget {
   @override
   _InventoryGenPTState createState() => _InventoryGenPTState();
@@ -16,18 +34,24 @@ class _InventoryGenPTState extends State<InventoryGenPT>
   bool isLoading = false;
   bool isScanning = false;
 
+  // Variables para ubicaciones
+  List<Ubicacion> ubicaciones = [];
+  Ubicacion? selectedUbicacion;
+
+  // Controlador para entrada manual
+  final TextEditingController manualInputController = TextEditingController();
+
   // Controladores para el formulario
   final TextEditingController fechaInventarioController =
       TextEditingController();
   final TextEditingController operadorController = TextEditingController();
-  final TextEditingController ubicacionController = TextEditingController();
   final TextEditingController nombreArchivoController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Iniciar el escáner automáticamente con delay
+    fetchUbicaciones();
     Future.delayed(Duration(milliseconds: 500), () {
       enableScannerAndStart();
     });
@@ -37,12 +61,28 @@ class _InventoryGenPTState extends State<InventoryGenPT>
   void dispose() {
     stopScanning();
     WidgetsBinding.instance.removeObserver(this);
-    // Liberar controladores
+    manualInputController.dispose();
     fechaInventarioController.dispose();
     operadorController.dispose();
-    ubicacionController.dispose();
     nombreArchivoController.dispose();
     super.dispose();
+  }
+
+  Future<void> fetchUbicaciones() async {
+    try {
+      final response = await http.get(
+        Uri.parse("http://172.16.10.31/api/Ubicacion/GetUbicaciones"),
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        setState(() {
+          ubicaciones = data.map((json) => Ubicacion.fromJson(json)).toList();
+        });
+      }
+    } catch (e) {
+      showSnackBar("Error al cargar ubicaciones: $e", isError: true);
+    }
   }
 
   @override
@@ -101,16 +141,14 @@ class _InventoryGenPTState extends State<InventoryGenPT>
   }
 
   Future<void> processScannedTag(String rawCode) async {
-    // Extraer y formatear el código
     String extractedCode = rawCode.split(RegExp(r'[ -]')).first;
     String formattedCode = extractedCode.length < 16
         ? extractedCode.padLeft(16, '0')
         : extractedCode;
 
-    // Verificar si ya existe
     if (scannedTags.any((tag) => tag['trazabilidad'] == formattedCode)) {
       showSnackBar("Etiqueta duplicada: $formattedCode", isError: true);
-      HapticFeedback.heavyImpact(); // Feedback de error
+      HapticFeedback.heavyImpact();
       return;
     }
 
@@ -118,37 +156,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
       lastScannedTag = "Procesando: $formattedCode";
     });
 
-    // Obtener datos del pallet
     await fetchPalletData(formattedCode);
-  }
-
-  void showSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              isError ? Icons.error_outline : Icons.check_circle_outline,
-              color: Colors.white,
-            ),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: isError ? Colors.red : Colors.teal,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
-        duration: Duration(seconds: 2),
-        margin: EdgeInsets.all(8),
-      ),
-    );
   }
 
   Future<void> fetchPalletData(String epc) async {
@@ -177,7 +185,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
           });
 
           showSnackBar("Etiqueta registrada correctamente");
-          HapticFeedback.mediumImpact(); // Feedback de éxito
+          HapticFeedback.mediumImpact();
         }
       } else {
         showSnackBar("Error: Tarima no encontrada", isError: true);
@@ -189,6 +197,43 @@ class _InventoryGenPTState extends State<InventoryGenPT>
         isLoading = false;
       });
     }
+  }
+
+  void _confirmarBorrarTodo() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text("Confirmar borrado"),
+          ],
+        ),
+        content: Text(
+            "¿Está seguro que desea borrar todos los elementos escaneados?"),
+        actions: [
+          TextButton(
+            child: Text("Cancelar"),
+            onPressed: () => Navigator.pop(context),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+            ),
+            child: Text("Borrar todo"),
+            onPressed: () {
+              setState(() {
+                scannedTags.clear();
+                lastScannedTag = "Escáner activado, esperando lectura...";
+              });
+              Navigator.pop(context);
+              showSnackBar("Se han borrado todos los elementos");
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> enviarInformacion() async {
@@ -214,7 +259,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
           "fechaInventario": fechaInventarioController.text,
           "formatoEtiqueta": "Inventario",
           "operador": operadorController.text,
-          "ubicacion": ubicacionController.text,
+          "ubicacion": selectedUbicacion?.claveUbicacion,
           "nombreArchivo": nombreArchivoController.text,
         }),
       );
@@ -242,7 +287,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
     }
     if (fechaInventarioController.text.isEmpty ||
         operadorController.text.isEmpty ||
-        ubicacionController.text.isEmpty ||
+        selectedUbicacion == null ||
         nombreArchivoController.text.isEmpty) {
       showSnackBar("Complete todos los campos del formulario", isError: true);
       return false;
@@ -255,8 +300,8 @@ class _InventoryGenPTState extends State<InventoryGenPT>
       scannedTags.clear();
       fechaInventarioController.clear();
       operadorController.clear();
-      ubicacionController.clear();
       nombreArchivoController.clear();
+      selectedUbicacion = null;
       lastScannedTag = "Escáner activado, esperando lectura...";
     });
   }
@@ -286,11 +331,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
                   icon: Icons.person,
                 ),
                 SizedBox(height: 16),
-                _buildFormField(
-                  controller: ubicacionController,
-                  label: "Ubicación",
-                  icon: Icons.place,
-                ),
+                _buildUbicacionDropdown(),
                 SizedBox(height: 16),
                 _buildFormField(
                   controller: nombreArchivoController,
@@ -386,13 +427,77 @@ class _InventoryGenPTState extends State<InventoryGenPT>
     );
   }
 
+  Widget _buildUbicacionDropdown() {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: DropdownButtonFormField<Ubicacion>(
+        value: selectedUbicacion,
+        decoration: InputDecoration(
+          labelText: "Ubicación",
+          prefixIcon: Icon(Icons.place, color: Colors.teal),
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+        items: ubicaciones.map((ubicacion) {
+          return DropdownMenuItem(
+            value: ubicacion,
+            child: Text(ubicacion.claveUbicacion),
+          );
+        }).toList(),
+        onChanged: (value) {
+          setState(() {
+            selectedUbicacion = value;
+          });
+        },
+      ),
+    );
+  }
+
+  void showSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isError ? Colors.red : Colors.teal,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        duration: Duration(seconds: 2),
+        margin: EdgeInsets.all(8),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.teal,
         elevation: 0,
+        title: Text("Inventario"),
         actions: [
+          IconButton(
+            icon: Icon(Icons.delete_sweep),
+            onPressed: () => _confirmarBorrarTodo(),
+            tooltip: 'Borrar todo',
+          ),
           IconButton(
             icon: Icon(Icons.refresh),
             onPressed: resetForm,
@@ -410,6 +515,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
         ),
         child: Column(
           children: [
+            _buildManualInput(),
             _buildScannerStatus(),
             Expanded(
               child: _buildProductList(),
@@ -426,9 +532,66 @@ class _InventoryGenPTState extends State<InventoryGenPT>
     );
   }
 
-  Widget _buildScannerStatus() {
+  Widget _buildManualInput() {
     return Card(
       margin: EdgeInsets.all(16),
+      elevation: 4,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: manualInputController,
+                decoration: InputDecoration(
+                  labelText: "Ingresar código manualmente",
+                  hintText: "Escriba el código de trazabilidad",
+                  prefixIcon: Icon(Icons.edit, color: Colors.teal),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.teal, width: 2),
+                  ),
+                ),
+                onSubmitted: (value) {
+                  if (value.isNotEmpty) {
+                    processScannedTag(value);
+                    manualInputController.clear();
+                  }
+                },
+              ),
+            ),
+            SizedBox(width: 16),
+            ElevatedButton(
+              onPressed: () {
+                if (manualInputController.text.isNotEmpty) {
+                  processScannedTag(manualInputController.text);
+                  manualInputController.clear();
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Icon(Icons.send),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScannerStatus() {
+    return Card(
+      margin: EdgeInsets.symmetric(horizontal: 16),
       elevation: 4,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(15),
@@ -514,7 +677,7 @@ class _InventoryGenPTState extends State<InventoryGenPT>
             ),
             SizedBox(height: 8),
             Text(
-              "Escanee una etiqueta para comenzar",
+              "Escanee una etiqueta o ingrese manualmente",
               style: TextStyle(
                 fontSize: 14,
                 color: Colors.grey.shade500,
