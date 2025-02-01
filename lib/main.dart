@@ -7,6 +7,7 @@ import 'package:zebra_scanner_app/dashboard_page.dart';
 import 'package:zebra_scanner_app/inventorygenpt.dart';
 import 'package:zebra_scanner_app/scanner_page.dart';
 import 'package:zebra_scanner_app/manage_pallet.dart';
+import 'package:zebra_scanner_app/scannermobileview.dart';
 import 'package:zebra_scanner_app/ubicacion_page.dart';
 import 'package:zebra_scanner_app/loading_screen.dart';
 
@@ -133,6 +134,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       title: 'Revisión de Calidad',
       icon: Icons.assignment_turned_in, // Icono de checklist/revisión
       screen: LogisticsReviewScreen(),
+    ),
+    MenuOption(
+      title: 'Scanner Mobile',
+      icon: Icons.nfc, // O podrías usar Icons.qr_code_scanner o Icons.sensors
+      screen: ScannerMobileView(),
     ),
   ];
 
