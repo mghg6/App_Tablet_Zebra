@@ -126,7 +126,7 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     try {
       final response = await http
           .get(
-            Uri.parse('http://172.16.20.172:80/readTag'),
+            Uri.parse('http://172.16.20.172:80/readTag}'),
           )
           .timeout(Duration(seconds: 5));
 
