@@ -4,8 +4,145 @@ import 'dart:ui';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-
+import 'dart:typed_data';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:http_parser/http_parser.dart';
+
+// Pantalla de vista previa de imagen
+class FullScreenImageView extends StatefulWidget {
+  final File imageFile;
+  final String title;
+
+  const FullScreenImageView({
+    Key? key,
+    required this.imageFile,
+    this.title = 'Vista previa',
+  }) : super(key: key);
+
+  @override
+  _FullScreenImageViewState createState() => _FullScreenImageViewState();
+}
+
+class _FullScreenImageViewState extends State<FullScreenImageView>
+    with SingleTickerProviderStateMixin {
+  late TransformationController _transformationController;
+  late AnimationController _animationController;
+  Animation<Matrix4>? _animation;
+  final double _minScale = 0.5;
+  final double _maxScale = 4.0;
+  TapDownDetails? _doubleTapDetails;
+
+  @override
+  void initState() {
+    super.initState();
+    _transformationController = TransformationController();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 300),
+    )..addListener(() {
+        if (_animation != null) {
+          _transformationController.value = _animation!.value;
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  // Método para restablecer la animación
+  void _resetAnimation() {
+    _animation = Matrix4Tween(
+      begin: _transformationController.value,
+      end: Matrix4.identity(),
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    ));
+    _animationController.forward(from: 0);
+  }
+
+  // Método para manejar doble tap con zoom
+  void _handleDoubleTapDown(TapDownDetails details) {
+    _doubleTapDetails = details;
+  }
+
+  // Método para manejar doble tap con zoom
+  void _handleDoubleTap() {
+    if (_doubleTapDetails == null) return;
+
+    if (_transformationController.value != Matrix4.identity()) {
+      // Si ya está ampliado, reset
+      _resetAnimation();
+    } else {
+      // Si no está ampliado, hacer zoom al punto tocado
+      final position = _doubleTapDetails!.localPosition;
+
+      // Traducir al origen, escalar y volver a traducir
+      final Matrix4 matrix = Matrix4.identity()
+        ..translate(-position.dx, -position.dy)
+        ..scale(2.5) // Escala fija para el zoom
+        ..translate(position.dx, position.dy);
+
+      // Animar hasta la nueva matriz
+      _animation = Matrix4Tween(
+        begin: _transformationController.value,
+        end: matrix,
+      ).animate(CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOut,
+      ));
+
+      _animationController.forward(from: 0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.zoom_out_map),
+            onPressed: _resetAnimation,
+            tooltip: 'Restablecer zoom',
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: GestureDetector(
+          onDoubleTapDown: _handleDoubleTapDown,
+          onDoubleTap: _handleDoubleTap,
+          child: InteractiveViewer(
+            transformationController: _transformationController,
+            minScale: _minScale,
+            maxScale: _maxScale,
+            child: Center(
+              child: Hero(
+                tag: widget.imageFile.path,
+                child: Image.file(
+                  widget.imageFile,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 // Modelo para Certificado de Calidad
 class QualityCertificate {
@@ -60,7 +197,7 @@ class LogisticsReviewDetailScreen extends StatefulWidget {
 }
 
 class _LogisticsReviewDetailScreenState
-    extends State<LogisticsReviewDetailScreen> {
+    extends State<LogisticsReviewDetailScreen> with WidgetsBindingObserver {
   bool isLoading = true;
   String? errorMessage;
   Map<String, dynamic>? detailData;
@@ -92,6 +229,7 @@ class _LogisticsReviewDetailScreenState
       'Empaque sin daños',
       'Producto limpio',
       'Sin deformaciones',
+      'Libre de plaga',
       'Flejado correcto',
     ],
     'Información y Etiquetado': [
@@ -114,10 +252,12 @@ class _LogisticsReviewDetailScreenState
     super.initState();
     _fetchDetails();
     _scrollController.addListener(_scrollListener);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_scrollListener);
     _scrollController.dispose();
     certificateController.dispose();
@@ -127,11 +267,343 @@ class _LogisticsReviewDetailScreenState
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Puedes usar esto para gestionar el estado de la cámara cuando la app cambia de estado
+    if (state == AppLifecycleState.resumed) {
+      // La aplicación se ha reanudado
+    }
+  }
+
   void _scrollListener() {
     if (_scrollController.offset >= 400) {
       if (!_showBackToTop) setState(() => _showBackToTop = true);
     } else {
       if (_showBackToTop) setState(() => _showBackToTop = false);
+    }
+  }
+
+  // Método para guardar revisión de calidad
+  Future<void> _saveQualityReview({
+    required int epcId,
+    required int logisticsReviewId,
+    required Map<String, bool> reviewPoints,
+    required String comments,
+    required String validator,
+    required String certificateNumber,
+    required DateTime validationDate,
+    required String certificateObservations,
+    required List<File> photos,
+  }) async {
+    try {
+      // Crear FormData
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://172.16.10.31/api/create'),
+      );
+
+      // Agregar campos de IDs
+      request.fields['id_epc'] = epcId.toString();
+      request.fields['id_logistics_review'] = logisticsReviewId.toString();
+
+      // Agregar campos booleanos para puntos de revisión
+      request.fields['tarima_estado'] =
+          reviewPoints['Tarima en buen estado']?.toString() ?? 'false';
+      request.fields['empaque_sin_danos'] =
+          reviewPoints['Empaque sin daños']?.toString() ?? 'false';
+      request.fields['producto_limpio'] =
+          reviewPoints['Producto limpio']?.toString() ?? 'false';
+      request.fields['sin_deformaciones'] =
+          reviewPoints['Sin deformaciones']?.toString() ?? 'false';
+      request.fields['libre_de_plaga'] =
+          reviewPoints['Libre de plaga']?.toString() ?? 'false';
+      request.fields['flejado_correcto'] =
+          reviewPoints['Flejado correcto']?.toString() ?? 'false';
+
+      request.fields['etiquetas_completas'] =
+          reviewPoints['Etiquetas completas']?.toString() ?? 'false';
+      request.fields['codigo_legible'] =
+          reviewPoints['Códigos de barras legibles']?.toString() ?? 'false';
+      request.fields['informacion_visible'] =
+          reviewPoints['Información visible']?.toString() ?? 'false';
+      request.fields['fechas_correctas'] =
+          reviewPoints['Fechas correctas']?.toString() ?? 'false';
+      request.fields['lote_visible'] =
+          reviewPoints['Lote visible']?.toString() ?? 'false';
+
+      request.fields['peso_correcto'] =
+          reviewPoints['Peso correcto']?.toString() ?? 'false';
+      request.fields['cantidad_correcta'] =
+          reviewPoints['Cantidad de piezas correcta']?.toString() ?? 'false';
+      request.fields['orden_correcta'] =
+          reviewPoints['Orden de producción correcta']?.toString() ?? 'false';
+      request.fields['unidad_correcta'] =
+          reviewPoints['Unidad de medida correcta']?.toString() ?? 'false';
+
+      // Agregar comentarios y datos del certificado
+      request.fields['comentarios'] = comments;
+      request.fields['validador'] = validator;
+      request.fields['certificado_calidad'] = certificateNumber;
+      request.fields['fecha_validacion'] = validationDate.toIso8601String();
+      request.fields['observaciones_certificado'] = certificateObservations;
+
+      // Agregar fotos
+      for (var i = 0; i < photos.length; i++) {
+        final file = photos[i];
+        final fileStream = http.ByteStream(file.openRead());
+        final fileLength = await file.length();
+
+        final multipartFile = http.MultipartFile(
+          'fotos', // El nombre del campo debe coincidir con lo que espera el controlador
+          fileStream,
+          fileLength,
+          filename: '${logisticsReviewId}_photo_$i.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        );
+
+        request.files.add(multipartFile);
+      }
+
+      // Enviar la solicitud
+      final response = await request.send();
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        print('Revisión de calidad guardada exitosamente');
+        // Procesar respuesta si es necesario
+        final responseData = await response.stream.bytesToString();
+        final jsonResponse = json.decode(responseData);
+        print(jsonResponse);
+      } else {
+        throw Exception('Error al guardar la revisión: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error enviando revisión: $e');
+      rethrow;
+    }
+  }
+
+// Método para actualizar el estado de la revisión
+  Future<void> _updateReviewStatus({
+    required int reviewId,
+    required String newStatus,
+  }) async {
+    try {
+      // Validar que el estado sea uno de los permitidos
+      final validStatuses = [
+        "Rechazado en Revisión de Calidad",
+        "Aprobado con Observaciones en Calidad",
+        "Aprobado en Revisión de Calidad",
+      ];
+
+      if (!validStatuses.contains(newStatus)) {
+        throw Exception('Estado inválido');
+      }
+
+      final response = await http.put(
+        Uri.parse(
+            'http://172.16.10.31/api/logistics_to_review/$reviewId/status'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          "status": newStatus
+        }), // Notar que enviamos directamente el string, no un objeto JSON
+      );
+
+      if (response.statusCode == 200) {
+        print('Estado actualizado correctamente');
+        // Procesar respuesta si es necesario
+        final jsonResponse = json.decode(response.body);
+        print(jsonResponse);
+      } else {
+        throw Exception(
+            'Error al actualizar el estado: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error actualizando estado: $e');
+      rethrow;
+    }
+  }
+
+  // Método para mostrar opciones de fuente de imagen
+  void _showImageSourceOptions(String trazabilidad, String point) {
+    showModalBottomSheet(
+      context: context,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => Container(
+        padding: EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Seleccionar imagen',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // Opción de cámara
+                _buildImageSourceOption(
+                  icon: Icons.camera_alt,
+                  label: 'Cámara',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _captureImage(trazabilidad, point, ImageSource.camera);
+                  },
+                ),
+                // Opción de galería
+                _buildImageSourceOption(
+                  icon: Icons.photo_library,
+                  label: 'Galería',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _captureImage(trazabilidad, point, ImageSource.gallery);
+                  },
+                ),
+              ],
+            ),
+            SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Widget para opciones de fuente de imagen
+  Widget _buildImageSourceOption({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+        decoration: BoxDecoration(
+          color: Colors.grey[100],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey[300]!),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 36, color: accentColor),
+            SizedBox(height: 12),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Método para capturar imágenes
+  Future<void> _captureImage(
+      String trazabilidad, String point, ImageSource source) async {
+    try {
+      final XFile? photo = await _imagePicker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1920,
+        maxHeight: 1080,
+      );
+
+      if (photo != null && mounted) {
+        setState(() {
+          reviewStates[trazabilidad]![point]!.photo = File(photo.path);
+          hasUnsavedChanges = true;
+        });
+        _showCommentDialog(
+            trazabilidad, point); // Vuelve a abrir el diálogo con la foto
+      } else {
+        // Si el usuario canceló la captura, volvemos a abrir el diálogo sin cambios
+        _showCommentDialog(trazabilidad, point);
+      }
+    } catch (e) {
+      _showErrorSnackBar('Error al capturar imagen: $e');
+      // En caso de error, volvemos a abrir el diálogo
+      if (mounted) _showCommentDialog(trazabilidad, point);
+    }
+  }
+
+  // Método para mostrar imagen en pantalla completa
+  void _showFullScreenImage(File imageFile, {String title = ''}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FullScreenImageView(
+          imageFile: imageFile,
+          title: title.isNotEmpty ? title : 'Vista previa',
+        ),
+      ),
+    );
+  }
+
+  // Método para optimizar y comprimir imágenes
+  Future<Uint8List?> _compressImage(File imageFile) async {
+    try {
+      // Leer la imagen original
+      final bytes = await imageFile.readAsBytes();
+
+      // Decodificar para obtener dimensiones
+      final decodedImage = await decodeImageFromList(bytes);
+      double width = decodedImage.width.toDouble();
+      double height = decodedImage.height.toDouble();
+
+      // Establecer dimensión máxima para la compresión
+      const double maxDimension = 1200.0;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+      }
+
+      // Crear un directorio temporal si es necesario
+      final tempDir = await getTemporaryDirectory();
+      final targetPath =
+          '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      // Comprimir la imagen
+      final result = await FlutterImageCompress.compressAndGetFile(
+        imageFile.path,
+        targetPath,
+        quality: 85,
+        format: CompressFormat.jpeg,
+        minWidth: width.round(),
+        minHeight: height.round(),
+      );
+
+      if (result != null) {
+        // Leer los bytes comprimidos
+        final compressedBytes = await result.readAsBytes();
+
+        // Eliminar el archivo temporal
+        try {
+          await File(targetPath).delete();
+        } catch (e) {
+          print('Error al eliminar archivo temporal: $e');
+        }
+
+        return compressedBytes;
+      }
+
+      return bytes; // Si la compresión falla, devolver los bytes originales
+    } catch (e) {
+      print('Error al comprimir imagen: $e');
+      return null;
     }
   }
 
@@ -440,6 +912,151 @@ class _LogisticsReviewDetailScreenState
     );
   }
 
+  // Método para construir categoría de revisión
+  Widget _buildReviewCategory(
+      String categoryName, List<String> points, String trazabilidad) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            categoryName,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800],
+            ),
+          ),
+          SizedBox(height: 12),
+          ...points.map((point) => _buildCheckboxItem(point, trazabilidad)),
+        ],
+      ),
+    );
+  }
+
+  // Método para construir el elemento de checkbox con foto
+  Widget _buildCheckboxItem(String point, String trazabilidad) {
+    final reviewPoint = reviewStates[trazabilidad]![point]!;
+
+    return Card(
+      margin: EdgeInsets.symmetric(vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    point,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ),
+                Switch(
+                  value: reviewPoint.isApproved,
+                  onChanged: (value) {
+                    setState(() {
+                      reviewPoint.isApproved = value;
+                      hasUnsavedChanges = true;
+                      if (!value) {
+                        _showCommentDialog(trazabilidad, point);
+                      } else {
+                        reviewPoint.comment = null;
+                        reviewPoint.photo = null;
+                      }
+                    });
+                  },
+                  activeColor: successColor,
+                ),
+              ],
+            ),
+            if (!reviewPoint.isApproved && reviewPoint.comment != null) ...[
+              Divider(),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Motivo:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(reviewPoint.comment!),
+                      ],
+                    ),
+                  ),
+                  if (reviewPoint.photo == null)
+                    IconButton(
+                      icon: Icon(Icons.camera_alt, color: accentColor),
+                      onPressed: () =>
+                          _showImageSourceOptions(trazabilidad, point),
+                      tooltip: 'Agregar foto',
+                    ),
+                ],
+              ),
+              if (reviewPoint.photo != null) ...[
+                SizedBox(height: 8),
+                Stack(
+                  children: [
+                    InkWell(
+                      onTap: () => _showFullScreenImage(reviewPoint.photo!),
+                      child: Hero(
+                        tag: reviewPoint.photo!.path,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.file(
+                            reviewPoint.photo!,
+                            height: 120,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: InkWell(
+                        onTap: () {
+                          setState(() {
+                            reviewPoint.photo = null;
+                            hasUnsavedChanges = true;
+                          });
+                        },
+                        child: Container(
+                          padding: EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.delete,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // Método para construir la tarjeta de información del producto
   Widget _buildProductInfoCard(Map<String, dynamic> epc) {
     return Container(
@@ -649,6 +1266,162 @@ class _LogisticsReviewDetailScreenState
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Método para mostrar el diálogo de comentarios con la opción de adjuntar fotos
+  void _showCommentDialog(String trazabilidad, String point) {
+    final reviewPoint = reviewStates[trazabilidad]![point]!;
+    final commentController = TextEditingController(text: reviewPoint.comment);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: warningColor),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Indicar motivo de no cumplimiento'),
+            ),
+          ],
+        ),
+        content: Container(
+          width: double.maxFinite, // Ancho fijo para el contenido
+          constraints: BoxConstraints(
+              maxWidth: 400, maxHeight: 500), // Restricciones de tamaño
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(point),
+                SizedBox(height: 16),
+                TextField(
+                  controller: commentController,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    hintText: '¿Por qué no cumple con este punto?',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    filled: true,
+                  ),
+                  autofocus: true,
+                ),
+                SizedBox(height: 16),
+                // Botón para adjuntar foto
+                OutlinedButton.icon(
+                  icon: Icon(Icons.add_a_photo),
+                  label: Text(reviewPoint.photo != null
+                      ? 'Cambiar foto'
+                      : 'Adjuntar foto'),
+                  style: OutlinedButton.styleFrom(
+                    padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context); // Cierra el diálogo actual
+                    _showImageSourceOptions(
+                        trazabilidad, point); // Muestra opciones de fuente
+                  },
+                ),
+                if (reviewPoint.photo != null) ...[
+                  SizedBox(height: 16),
+                  Text('Foto adjunta:'),
+                  SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: 150,
+                      maxWidth: 300,
+                    ),
+                    child: InkWell(
+                      onTap: () => _showFullScreenImage(reviewPoint.photo!),
+                      child: Stack(
+                        children: [
+                          Hero(
+                            tag: reviewPoint.photo!.path,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(
+                                reviewPoint.photo!,
+                                height: 150,
+                                width: 300,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: InkWell(
+                              onTap: () {
+                                setState(() {
+                                  reviewPoint.photo = null;
+                                });
+                                Navigator.pop(context);
+                                _showCommentDialog(trazabilidad, point);
+                              },
+                              child: Container(
+                                padding: EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.5),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.delete,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() {
+                reviewPoint.isApproved = true;
+                reviewPoint.comment = null;
+                reviewPoint.photo = null;
+              });
+              Navigator.pop(context);
+            },
+            child: Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (commentController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Por favor, indica el motivo'),
+                    backgroundColor: errorColor,
+                  ),
+                );
+                return;
+              }
+              setState(() {
+                reviewPoint.comment = commentController.text;
+                hasUnsavedChanges = true;
+              });
+              Navigator.pop(context);
+            },
+            child: Text('Guardar'),
           ),
         ],
       ),
@@ -999,331 +1772,1363 @@ class _LogisticsReviewDetailScreenState
     );
   }
 
-  // Función de guardado modificada
-  Future<void> _saveReview() async {
-    // Verificar certificados faltantes
-    final Map<String, List<Map<String, dynamic>>> productGroups = {};
-    final detalleEPCs = detailData!['detalleEPCs'] as List;
-
-    // Agrupar EPCs por producto
-    for (var epc in detalleEPCs) {
-      final claveProducto = epc['claveProducto'].toString();
-      productGroups[claveProducto] = productGroups[claveProducto] ?? [];
-      productGroups[claveProducto]!.add(epc);
-    }
-
-    // Verificar certificados faltantes
-    final List<String> missingCertificates = [];
-    for (var claveProducto in productGroups.keys) {
-      if (!certificates.containsKey(claveProducto)) {
-        missingCertificates.add(claveProducto);
-      }
-    }
-
-    if (missingCertificates.isNotEmpty) {
-      _showErrorDialog(
-        context: context,
-        title: 'Certificados Pendientes',
-        message:
-            'Faltan certificados de calidad para los siguientes productos:\n\n' +
-                missingCertificates.map((clave) => '• $clave').join('\n'),
-        primaryActionText: 'Agregar Certificado',
-        primaryAction: () {
-          Navigator.pop(context);
-          _showCertificateModal(
-            missingCertificates.first,
-            productGroups[missingCertificates.first]!,
-          );
-        },
-      );
-      return;
-    }
-
-    // Verificar puntos no aprobados sin comentario
-    String? missingReview;
-    String? missingEPC;
-    bool hasRejections = false;
-
-    for (var entry in reviewStates.entries) {
-      for (var pointEntry in entry.value.entries) {
-        if (!pointEntry.value.isApproved) {
-          hasRejections = true;
-          if (pointEntry.value.comment == null) {
-            missingReview = pointEntry.key;
-            missingEPC = entry.key;
-            break;
-          }
-        }
-      }
-      if (missingReview != null) break;
-    }
-
-    if (missingReview != null) {
-      _showErrorDialog(
-        context: context,
-        title: 'Comentario Requerido',
-        message: 'Falta indicar el motivo de no cumplimiento para:\n' +
-            '"$missingReview"\n' +
-            'de la trazabilidad $missingEPC',
-      );
-      return;
-    }
-
-    // Determinar estado final
-    final String newStatus = hasRejections
-        ? "Rechazado en Revisión de Calidad"
-        : "Aprobado por Calidad";
-
-    // Mostrar diálogo de confirmación
-    final bool? confirm = await _showConfirmationDialog(
-      context: context,
-      hasRejections: hasRejections,
-      certificates: certificates,
-    );
-
-    if (confirm != true) return;
-
+  // Método para guardar una foto localmente
+  Future<String?> _savePhotoLocally({
+    required int reviewId,
+    required String trazabilidad,
+    required String pointName,
+    required Uint8List photoData,
+  }) async {
     try {
-      setState(() => isLoading = true);
+      // Solicitar permisos
+      final permissionGranted = await requestStoragePermission();
+      if (!permissionGranted) {
+        throw Exception('Permisos de almacenamiento denegados');
+      }
 
-      // Preparar datos
-      final reviewData = {
-        'status': newStatus,
-        'certificates':
-            certificates.map((key, value) => MapEntry(key, value.toJson())),
-        'reviewStates': reviewStates.map((key, value) => MapEntry(
-              key,
-              value.map((k, v) => MapEntry(k, {
-                    'isApproved': v.isApproved,
-                    'comment': v.comment,
-                    'hasPhoto': v.photo != null,
-                  })),
-            )),
+      // Obtener directorio de aplicación
+      final appDir = await getApplicationDocumentsDirectory();
+      final reviewDir = Directory('${appDir.path}/reviews/$reviewId');
+
+      // Crear directorio si no existe
+      if (!await reviewDir.exists()) {
+        await reviewDir.create(recursive: true);
+      }
+
+      // Generar un nombre de archivo único basado en trazabilidad y punto
+      final String fileName =
+          'photo_${trazabilidad.replaceAll(RegExp(r'[^\w]'), '_')}_${pointName.replaceAll(RegExp(r'[^\w]'), '_')}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String filePath = '${reviewDir.path}/$fileName';
+
+      // Guardar archivo
+      final file = File(filePath);
+      await file.writeAsBytes(photoData);
+
+      print('Foto guardada localmente en: $filePath');
+      return filePath;
+    } catch (e) {
+      print('Error al guardar foto localmente: $e');
+      return null;
+    }
+  }
+
+  // Método para guardar metadatos de fotos
+  Future<void> _savePhotoMetadata(
+      int reviewId, List<Map<String, dynamic>> photosData) async {
+    try {
+      // Obtener directorio de aplicación
+      final appDir = await getApplicationDocumentsDirectory();
+      final metadataDir = Directory('${appDir.path}/reviews/$reviewId');
+
+      // Crear directorio si no existe
+      if (!await metadataDir.exists()) {
+        await metadataDir.create(recursive: true);
+      }
+
+      // Crear un objeto JSON con los metadatos
+      final metadata = {
+        'reviewId': reviewId,
+        'createdAt': DateTime.now().toIso8601String(),
+        'photos': photosData
+            .map((photo) => {
+                  'trazabilidad': photo['trazabilidad'],
+                  'point': photo['point'],
+                  'timestamp': photo['timestamp'],
+                  // No incluimos los datos binarios de la foto aquí, solo la referencia
+                  'photoPath':
+                      'photo_${photo['trazabilidad'].replaceAll(RegExp(r'[^\w]'), '_')}_${photo['point'].replaceAll(RegExp(r'[^\w]'), '_')}_${DateTime.parse(photo['timestamp']).millisecondsSinceEpoch}.jpg',
+                })
+            .toList(),
       };
 
-      // Enviar revisión
-      final response = await http.put(
-        Uri.parse(
-          'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status',
-        ),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(reviewData),
-      );
+      // Guardar archivo JSON con metadatos
+      final File metadataFile = File('${metadataDir.path}/metadata.json');
+      await metadataFile.writeAsString(jsonEncode(metadata));
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        // Enviar fotos
-        await _uploadPhotos();
-
-        setState(() => hasUnsavedChanges = false);
-        if (mounted) {
-          Navigator.pop(context, true);
-          _showSuccessMessage(
-            hasRejections
-                ? 'Revisión rechazada y guardada correctamente'
-                : 'Revisión aprobada y guardada correctamente',
-          );
-        }
-      } else {
-        throw Exception('Error al guardar la revisión: ${response.statusCode}');
-      }
+      print('Metadatos guardados en: ${metadataFile.path}');
     } catch (e) {
-      _showErrorSnackBar(e.toString());
-    } finally {
-      if (mounted) {
-        setState(() => isLoading = false);
+      print('Error al guardar metadatos: $e');
+    }
+  }
+
+  // Método para solicitar permisos de almacenamiento
+  Future<bool> requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      if (androidInfo.version.sdkInt >= 33) {
+        final statusPhotos = await Permission.photos.request();
+        return statusPhotos.isGranted;
+      }
+    }
+
+    final status = await Permission.storage.request();
+    return status.isGranted;
+  }
+
+  // Función para limpiar archivos temporales
+  Future<void> _cleanupTempFiles() async {
+    for (var trazabilidadStates in reviewStates.values) {
+      for (var reviewPoint in trazabilidadStates.values) {
+        if (reviewPoint.photo != null) {
+          try {
+            await reviewPoint.photo!.delete();
+          } catch (e) {
+            print('Error deleting temp file: $e');
+          }
+        }
       }
     }
   }
 
-  // Función para subir fotos
+  // Método mejorado para subir fotos al servidor
   Future<void> _uploadPhotos() async {
+    int totalPhotos = 0;
+    int uploadedPhotos = 0;
+
+    // Contar el total de fotos a subir
+    for (var trazabilidad in reviewStates.keys) {
+      for (var point in reviewStates[trazabilidad]!.keys) {
+        if (reviewStates[trazabilidad]![point]!.photo != null) {
+          totalPhotos++;
+        }
+      }
+    }
+
+    if (totalPhotos == 0) return; // No hay fotos para subir
+
+    // Mostrar indicador de progreso
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+              SizedBox(width: 16),
+              Text('Guardando fotos (0/$totalPhotos)...'),
+            ],
+          ),
+          duration: Duration(seconds: 30),
+          backgroundColor: primaryColor,
+        ),
+      );
+    }
+
+    // Mientras el endpoint no esté disponible, guardaremos las fotos localmente
+    final temporaryPhotoData = <Map<String, dynamic>>[];
+
+    // Subir cada foto
     for (var trazabilidad in reviewStates.keys) {
       for (var point in reviewStates[trazabilidad]!.keys) {
         final reviewPoint = reviewStates[trazabilidad]![point]!;
         if (reviewPoint.photo != null) {
-          final photoData = await reviewPoint.photo!.readAsBytes();
-          final photoResponse = await http.post(
-            Uri.parse(
-              'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/photos',
-            ),
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: json.encode({
+          try {
+            // Comprimir la imagen
+            final photoData = await _compressImage(reviewPoint.photo!);
+            if (photoData == null) {
+              throw Exception('Error al comprimir la imagen');
+            }
+
+            // Guardar información para cuando el endpoint esté disponible
+            temporaryPhotoData.add({
               'trazabilidad': trazabilidad,
               'point': point,
-              'photo': base64Encode(photoData),
-            }),
-          );
-          if (photoResponse.statusCode != 200 &&
-              photoResponse.statusCode != 201) {
-            throw Exception(
-              'Error al subir foto para $trazabilidad - $point',
+              'photoData': photoData,
+              'timestamp': DateTime.now().toIso8601String(),
+            });
+
+            // Guardar la foto localmente para uso futuro
+            await _savePhotoLocally(
+              reviewId: widget.reviewId,
+              trazabilidad: trazabilidad,
+              pointName: point,
+              photoData: photoData,
             );
+
+            uploadedPhotos++;
+
+            // Actualizar el indicador de progreso
+            if (mounted) {
+              ScaffoldMessenger.of(context).clearSnackBars();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        value: uploadedPhotos / totalPhotos,
+                      ),
+                      SizedBox(width: 16),
+                      Text('Guardando fotos ($uploadedPhotos/$totalPhotos)...'),
+                    ],
+                  ),
+                  duration: Duration(seconds: 30),
+                  backgroundColor: primaryColor,
+                ),
+              );
+            }
+          } catch (e) {
+            print('Error al procesar foto para $trazabilidad - $point: $e');
+            throw Exception(
+                'Error al procesar foto para $trazabilidad - $point: $e');
           }
         }
       }
     }
+
+    // Limpiar notificación cuando termine
+    if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+    }
+
+    // Guardar metadatos de las fotos para uso futuro
+    if (temporaryPhotoData.isNotEmpty) {
+      await _savePhotoMetadata(widget.reviewId, temporaryPhotoData);
+    }
+
+    // NOTA: Cuando implementes el endpoint, puedes descomentar este código
+    // y adaptarlo según tus necesidades
+
+    /*
+    // Implementación futura para cuando el endpoint esté disponible
+    for (var photoInfo in temporaryPhotoData) {
+      try {
+        final photoResponse = await http.post(
+          Uri.parse(
+            'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/photos',
+          ),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({
+            'trazabilidad': photoInfo['trazabilidad'],
+            'point': photoInfo['point'],
+            'photo': base64Encode(photoInfo['photoData']),
+            'timestamp': photoInfo['timestamp'],
+          }),
+        );
+        
+        if (photoResponse.statusCode != 200 && photoResponse.statusCode != 201) {
+          throw Exception('Error del servidor: ${photoResponse.statusCode}');
+        }
+      } catch (e) {
+        print('Error al subir foto: $e');
+        throw Exception('Error al subir foto: $e');
+      }
+    }
+    */
+  }
+
+  // Función de guardado modificada
+  // Implementación mejorada del método _saveReview
+  Future<void> _saveReview() async {
+    try {
+      print('==== INICIANDO PROCESO DE GUARDAR REVISIÓN ====');
+      setState(() => isLoading = true);
+
+      // Calcular si hay rechazos en algún punto de la revisión
+      print('Verificando si hay rechazos...');
+      bool hasRejections = false;
+      for (var trazabilidadKey in reviewStates.keys) {
+        print('Verificando rechazos para trazabilidad: $trazabilidadKey');
+        for (var pointKey in reviewStates[trazabilidadKey]!.keys) {
+          final point = reviewStates[trazabilidadKey]![pointKey]!;
+          if (!point.isApproved) {
+            print('Rechazo encontrado en: $pointKey');
+            hasRejections = true;
+            break;
+          }
+        }
+        if (hasRejections) break;
+      }
+      print('¿Tiene rechazos? $hasRejections');
+
+      // Verificar certificados faltantes
+      print('Verificando certificados...');
+      final Map<String, List<Map<String, dynamic>>> productGroups = {};
+      final detalleEPCs = detailData!['detalleEPCs'] as List;
+
+      // Agrupar EPCs por producto
+      for (var epc in detalleEPCs) {
+        final claveProducto = epc['claveProducto'].toString();
+        productGroups[claveProducto] = productGroups[claveProducto] ?? [];
+        productGroups[claveProducto]!.add(epc);
+      }
+      print('EPCs agrupados por producto: ${productGroups.keys.join(', ')}');
+
+      // Verificar certificados faltantes
+      final List<String> missingCertificates = [];
+      for (var claveProducto in productGroups.keys) {
+        if (!certificates.containsKey(claveProducto)) {
+          print('Certificado faltante para: $claveProducto');
+          missingCertificates.add(claveProducto);
+        }
+      }
+
+      if (missingCertificates.isNotEmpty) {
+        print(
+            'ERROR: Certificados pendientes: ${missingCertificates.join(', ')}');
+        _showErrorDialog(
+          context: context,
+          title: 'Certificados Pendientes',
+          message:
+              'Faltan certificados de calidad para los siguientes productos:\n\n' +
+                  missingCertificates.map((clave) => '• $clave').join('\n'),
+          primaryActionText: 'Agregar Certificado',
+          primaryAction: () {
+            Navigator.pop(context);
+            _showCertificateModal(
+              missingCertificates.first,
+              productGroups[missingCertificates.first]!,
+            );
+          },
+        );
+        setState(() => isLoading = false);
+        return;
+      }
+      print('Verificación de certificados completada con éxito');
+
+      // Verificar puntos no aprobados sin comentario
+      print('Verificando comentarios para puntos no aprobados...');
+      String? missingReview;
+      String? missingEPC;
+
+      for (var entry in reviewStates.entries) {
+        for (var pointEntry in entry.value.entries) {
+          if (!pointEntry.value.isApproved) {
+            print('Punto no aprobado: ${entry.key} - ${pointEntry.key}');
+            if (pointEntry.value.comment == null ||
+                pointEntry.value.comment!.isEmpty) {
+              print(
+                  'ERROR: Punto sin comentario: ${entry.key} - ${pointEntry.key}');
+              missingReview = pointEntry.key;
+              missingEPC = entry.key;
+              break;
+            } else {
+              print('Comentario encontrado: ${pointEntry.value.comment}');
+            }
+          }
+        }
+        if (missingReview != null) break;
+      }
+
+      if (missingReview != null) {
+        print('ERROR: Comentario requerido para $missingEPC - $missingReview');
+        _showErrorDialog(
+          context: context,
+          title: 'Comentario Requerido',
+          message: 'Falta indicar el motivo de no cumplimiento para:\n' +
+              '"$missingReview"\n' +
+              'de la trazabilidad $missingEPC',
+        );
+        setState(() => isLoading = false);
+        return;
+      }
+      print('Verificación de comentarios completada con éxito');
+
+      // Obtener todos los valores necesarios de tu diálogo de confirmación
+      print('Mostrando diálogo de confirmación...');
+      final confirmationResult = await _showConfirmationDialog(
+        context: context,
+        hasRejections: hasRejections,
+        certificates: certificates,
+      );
+
+      if (confirmationResult == null) {
+        print('Cancelado por el usuario');
+        setState(() => isLoading = false);
+        return;
+      }
+
+      final String newStatus = confirmationResult['status'];
+      final String validator = confirmationResult['validator'];
+      final String timestamp = confirmationResult['timestamp'];
+      print(
+          'Datos de confirmación: status=$newStatus, validator=$validator, timestamp=$timestamp');
+
+      // 1. Primero actualizar el estado de la revisión
+      print('Actualizando estado de la revisión a: $newStatus');
+      try {
+        final statusResponse = await http.put(
+          Uri.parse(
+              'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode(newStatus),
+        );
+
+        print(
+            'Respuesta de actualización de estado: ${statusResponse.statusCode}');
+        print('Cuerpo de respuesta: ${statusResponse.body}');
+
+        if (statusResponse.statusCode != 200 &&
+            statusResponse.statusCode != 201) {
+          throw Exception('Error al actualizar estado: ${statusResponse.body}');
+        }
+      } catch (e) {
+        print('ERROR al actualizar estado: $e');
+        throw Exception('Error al actualizar estado: $e');
+      }
+
+      // 2. Luego, para cada EPC, guardar su revisión de calidad
+      print(
+          'Procesando ${detalleEPCs.length} EPCs para revisión de calidad...');
+      int epcCounter = 0;
+      int successCount = 0;
+      int failureCount = 0;
+      List<String> failedEpcs = [];
+
+      for (var epc in detalleEPCs) {
+        epcCounter++;
+        final trazabilidad = epc['trazabilidad'].toString();
+
+        print('==== EPC #$epcCounter: $trazabilidad ====');
+
+        try {
+          // Preparar el FormData para este EPC
+          print('Preparando request para $trazabilidad...');
+
+          // URL correcta para el endpoint
+          final endpoint =
+              'http://172.16.10.31/api/QualityLogisticsReview/create';
+          var request = http.MultipartRequest('POST', Uri.parse(endpoint));
+
+          // Agregar trazabilidad en lugar de id_epc
+          request.fields['trazabilidad'] = trazabilidad;
+          request.fields['id_logistics_review'] = widget.reviewId.toString();
+          print(
+              'IDs configurados: trazabilidad=$trazabilidad, logistics_review=${widget.reviewId}');
+
+          // Listar todas las claves en reviewStates para este EPC
+          print('Claves disponibles para $trazabilidad:');
+          reviewStates[trazabilidad]!.keys.forEach((key) {
+            print('  - $key: ${reviewStates[trazabilidad]![key]!.isApproved}');
+          });
+
+          // Agregar puntos de revisión - Estado Físico
+          try {
+            print('Agregando puntos de Estado Físico...');
+            request.fields['tarima_estado'] =
+                reviewStates[trazabilidad]!['Tarima en buen estado']!
+                    .isApproved
+                    .toString();
+            request.fields['empaque_sin_danos'] =
+                reviewStates[trazabilidad]!['Empaque sin daños']!
+                    .isApproved
+                    .toString();
+            request.fields['producto_limpio'] =
+                reviewStates[trazabilidad]!['Producto limpio']!
+                    .isApproved
+                    .toString();
+            request.fields['sin_deformaciones'] =
+                reviewStates[trazabilidad]!['Sin deformaciones']!
+                    .isApproved
+                    .toString();
+            request.fields['libre_de_plaga'] =
+                reviewStates[trazabilidad]!['Libre de plaga']!
+                    .isApproved
+                    .toString();
+            request.fields['flejado_correcto'] =
+                reviewStates[trazabilidad]!['Flejado correcto']!
+                    .isApproved
+                    .toString();
+          } catch (e) {
+            print('ERROR al agregar puntos de Estado Físico: $e');
+            throw Exception('Error con los puntos de Estado Físico: $e');
+          }
+
+          // Información y Etiquetado
+          try {
+            print('Agregando puntos de Información y Etiquetado...');
+            request.fields['etiquetas_completas'] =
+                reviewStates[trazabilidad]!['Etiquetas completas']!
+                    .isApproved
+                    .toString();
+            request.fields['codigo_legible'] =
+                reviewStates[trazabilidad]!['Códigos de barras legibles']!
+                    .isApproved
+                    .toString();
+            request.fields['informacion_visible'] =
+                reviewStates[trazabilidad]!['Información visible']!
+                    .isApproved
+                    .toString();
+            request.fields['fechas_correctas'] =
+                reviewStates[trazabilidad]!['Fechas correctas']!
+                    .isApproved
+                    .toString();
+            request.fields['lote_visible'] =
+                reviewStates[trazabilidad]!['Lote visible']!
+                    .isApproved
+                    .toString();
+          } catch (e) {
+            print('ERROR al agregar puntos de Información y Etiquetado: $e');
+            throw Exception(
+                'Error con los puntos de Información y Etiquetado: $e');
+          }
+
+          // Especificaciones
+          try {
+            print('Agregando puntos de Especificaciones...');
+            request.fields['peso_correcto'] =
+                reviewStates[trazabilidad]!['Peso correcto']!
+                    .isApproved
+                    .toString();
+            request.fields['cantidad_correcta'] =
+                reviewStates[trazabilidad]!['Cantidad de piezas correcta']!
+                    .isApproved
+                    .toString();
+            request.fields['orden_correcta'] =
+                reviewStates[trazabilidad]!['Orden de producción correcta']!
+                    .isApproved
+                    .toString();
+            request.fields['unidad_correcta'] =
+                reviewStates[trazabilidad]!['Unidad de medida correcta']!
+                    .isApproved
+                    .toString();
+          } catch (e) {
+            print('ERROR al agregar puntos de Especificaciones: $e');
+            throw Exception('Error con los puntos de Especificaciones: $e');
+          }
+
+          // Recopilar comentarios de puntos no aprobados
+          print('Recopilando comentarios...');
+          final List<String> comments = [];
+          for (var entry in reviewStates[trazabilidad]!.entries) {
+            if (!entry.value.isApproved && entry.value.comment != null) {
+              comments.add('${entry.key}: ${entry.value.comment}');
+              print('  - Comentario para ${entry.key}: ${entry.value.comment}');
+            }
+          }
+
+          // Asegurarse de que comentarios tenga un valor, incluso cuando esté vacío
+          String commentText = comments.join('\n');
+          if (commentText.isEmpty) {
+            commentText =
+                "Sin comentarios"; // Proporcionar un valor por defecto
+            print(
+                'No hay comentarios - usando valor por defecto: "Sin comentarios"');
+          }
+
+          // Obtener el certificado para este producto
+          final claveProducto = epc['claveProducto'].toString();
+          final certificate = certificates[claveProducto]!;
+          print(
+              'Certificado encontrado para $claveProducto: ${certificate.certificateNumber}');
+
+          // IMPORTANTE: Asegurar que el validador nunca sea nulo o vacío
+          String validatorValue = validator.trim();
+          if (validatorValue.isEmpty) {
+            validatorValue = "Sistema"; // Valor por defecto para validador
+            print(
+                'ADVERTENCIA: Validador estaba vacío, usando valor por defecto: "Sistema"');
+          }
+
+          // Formatear fecha de validación correctamente
+          String fechaValidacion;
+          try {
+            // Asegurar que tengamos una fecha válida
+            DateTime dateTime = certificate.validationDate;
+            // Formato ISO 8601 simple sin milisegundos
+            fechaValidacion = "${dateTime.year}-"
+                "${dateTime.month.toString().padLeft(2, '0')}-"
+                "${dateTime.day.toString().padLeft(2, '0')}T"
+                "${dateTime.hour.toString().padLeft(2, '0')}:"
+                "${dateTime.minute.toString().padLeft(2, '0')}:"
+                "${dateTime.second.toString().padLeft(2, '0')}";
+          } catch (e) {
+            // Si hay problemas con la fecha, usar la fecha actual
+            final now = DateTime.now();
+            fechaValidacion = "${now.year}-"
+                "${now.month.toString().padLeft(2, '0')}-"
+                "${now.day.toString().padLeft(2, '0')}T"
+                "${now.hour.toString().padLeft(2, '0')}:"
+                "${now.minute.toString().padLeft(2, '0')}:"
+                "${now.second.toString().padLeft(2, '0')}";
+            print(
+                'ERROR con fecha de validación, usando fecha actual: $fechaValidacion');
+          }
+
+          // Asegurar que observaciones_certificado nunca sea nulo
+          String observacionesValue = certificate.observations.trim();
+          if (observacionesValue.isEmpty) {
+            observacionesValue = "Sin observaciones";
+          }
+
+          // Agregar comentarios y certificado
+          print('Agregando datos de comentarios y certificado...');
+          request.fields['comentarios'] = commentText;
+          request.fields['validador'] = validatorValue; // Campo obligatorio
+          request.fields['certificado_calidad'] = certificate.certificateNumber;
+          request.fields['fecha_validacion'] = fechaValidacion;
+          request.fields['observaciones_certificado'] = observacionesValue;
+
+          // Recopilar fotos para este EPC
+          print('Procesando fotos...');
+          final List<File> photos = [];
+          for (var pointEntry in reviewStates[trazabilidad]!.entries) {
+            if (!pointEntry.value.isApproved &&
+                pointEntry.value.photo != null) {
+              photos.add(pointEntry.value.photo!);
+              print(
+                  '  - Foto para ${pointEntry.key}: ${pointEntry.value.photo!.path}');
+            }
+          }
+
+          print('Agregando ${photos.length} fotos al request...');
+          // Añadir las fotos al request
+          for (var i = 0; i < photos.length; i++) {
+            try {
+              final photo = photos[i];
+              print('  - Procesando foto #${i + 1}: ${photo.path}');
+
+              final stream = http.ByteStream(photo.openRead());
+              final length = await photo.length();
+              print('    Tamaño: $length bytes');
+
+              final multipartFile = http.MultipartFile(
+                'fotos',
+                stream,
+                length,
+                filename:
+                    '${trazabilidad}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
+                contentType: MediaType('image', 'jpeg'),
+              );
+
+              request.files.add(multipartFile);
+              print('    Foto añadida al request');
+            } catch (e) {
+              print('ERROR al procesar foto $i: $e');
+            }
+          }
+
+          // Imprimir todos los campos para verificar
+          print('==== CAMPOS DEL REQUEST ====');
+          request.fields.forEach((key, value) {
+            print('$key: $value');
+          });
+          print('==== FIN CAMPOS DEL REQUEST ====');
+
+          // Enviar solicitud con reintento sin fotos si falla
+          print('Enviando request para $trazabilidad a $endpoint...');
+          try {
+            final streamedResponse =
+                await request.send().timeout(Duration(seconds: 30));
+            print('Respuesta recibida. Status: ${streamedResponse.statusCode}');
+
+            final response = await http.Response.fromStream(streamedResponse);
+            print('Cuerpo de respuesta: ${response.body}');
+
+            if (response.statusCode == 200 || response.statusCode == 201) {
+              print('Revisión guardada correctamente para $trazabilidad');
+              successCount++;
+            } else {
+              print(
+                  'ERROR: Respuesta de error del servidor: ${response.statusCode}');
+              print('Cuerpo de respuesta: ${response.body}');
+
+              // Si hay error y tenemos fotos, intentar de nuevo sin fotos
+              if (request.files.isNotEmpty) {
+                print('Reintentando sin fotos...');
+                var requestWithoutPhotos =
+                    http.MultipartRequest('POST', Uri.parse(endpoint));
+                requestWithoutPhotos.fields.addAll(request.fields);
+
+                final retryResponse = await requestWithoutPhotos
+                    .send()
+                    .timeout(Duration(seconds: 30));
+                final retryResponseBody =
+                    await http.Response.fromStream(retryResponse);
+
+                if (retryResponse.statusCode == 200 ||
+                    retryResponse.statusCode == 201) {
+                  print(
+                      'Revisión guardada correctamente sin fotos para $trazabilidad');
+                  successCount++;
+                } else {
+                  throw Exception(
+                      'Error al guardar revisión (sin fotos): ${retryResponseBody.body}');
+                }
+              } else {
+                throw Exception('Error al guardar revisión: ${response.body}');
+              }
+            }
+          } catch (e) {
+            print('ERROR al enviar request: $e');
+            throw e; // Re-lanzar para manejar en el catch externo
+          }
+        } catch (e) {
+          print('ERROR al procesar EPC $trazabilidad: $e');
+          failureCount++;
+          failedEpcs.add(trazabilidad);
+          // Continuar con el siguiente EPC en lugar de detener todo el proceso
+        }
+
+        print('EPC $trazabilidad procesado.');
+      }
+
+      print(
+          'Todos los EPCs procesados. $successCount exitosos, $failureCount fallidos.');
+      if (failedEpcs.isNotEmpty) {
+        print('EPCs fallidos: ${failedEpcs.join(", ")}');
+      }
+
+      // Si al menos algunos se procesaron correctamente, considerar la operación como exitosa
+      if (successCount > 0) {
+        setState(() => hasUnsavedChanges = false);
+
+        if (mounted) {
+          print('Navegando de vuelta...');
+          Navigator.pop(context, true);
+
+          String statusMessage = '';
+          if (newStatus.contains('Rechazado')) {
+            statusMessage = 'Revisión rechazada';
+          } else if (newStatus.contains('Observaciones')) {
+            statusMessage = 'Revisión aprobada con observaciones';
+          } else {
+            statusMessage = 'Revisión aprobada';
+          }
+
+          if (failureCount > 0) {
+            statusMessage +=
+                ' (${successCount}/${detalleEPCs.length} EPCs guardados)';
+          } else {
+            statusMessage += ' y guardada correctamente';
+          }
+
+          print('Mostrando mensaje de éxito: $statusMessage');
+          _showSuccessMessage(statusMessage);
+        }
+      } else {
+        throw Exception(
+            'No se pudo guardar ninguna revisión. Verifica los errores e intenta nuevamente.');
+      }
+
+      print('==== PROCESO DE GUARDAR REVISIÓN COMPLETADO ====');
+    } catch (e) {
+      print('==== ERROR FATAL EN EL PROCESO DE GUARDAR ====');
+      print('Excepción: $e');
+      print('Stack trace: ${StackTrace.current}');
+      _showErrorSnackBar('Error al guardar: ${e.toString()}');
+    } finally {
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
+      print('==== FIN DEL PROCESO ====');
+    }
   }
 
   // Diálogo de confirmación mejorado
-  Future<bool?> _showConfirmationDialog({
+  Future<Map<String, dynamic>?> _showConfirmationDialog({
     required BuildContext context,
     required bool hasRejections,
     required Map<String, QualityCertificate> certificates,
   }) {
-    return showDialog<bool>(
+    // Obtener información necesaria del encabezado
+    final encabezado = detailData?['encabezado'];
+    final logisticaNumero = encabezado['no_Logistica'].toString();
+    final cliente = encabezado['cliente'].toString();
+
+    // Controlador para la persona que valida
+    final validatorController = TextEditingController();
+    validatorController.text = validatorController.text.isEmpty
+        ? (certificates.isNotEmpty ? certificates.values.first.validator : '')
+        : validatorController.text;
+
+    // Estados posibles para la revisión
+    final List<String> estadosRevisiones = [
+      'Rechazado en Revisión de Calidad',
+      'Aprobado con Observaciones en Calidad',
+      'Aprobado en Revisión de Calidad'
+    ];
+
+    // Estado inicial basado en si hay rechazos
+    String selectedStatus = hasRejections
+        ? 'Rechazado en Revisión de Calidad'
+        : 'Aprobado en Revisión de Calidad';
+
+    // Fecha y hora actuales
+    final now = DateTime.now();
+    final formattedDateTime = DateFormat('dd/MM/yyyy HH:mm').format(now);
+
+    // Calcular resumen de productos y EPCs
+    final Map<String, Map<String, dynamic>> productSummary = {};
+    final detalleEPCs = detailData!['detalleEPCs'] as List;
+
+    // Agrupar EPCs por producto y calcular estadísticas
+    for (var epc in detalleEPCs) {
+      final claveProducto = epc['claveProducto'].toString();
+      final trazabilidad = epc['trazabilidad'].toString();
+
+      if (!productSummary.containsKey(claveProducto)) {
+        productSummary[claveProducto] = {
+          'nombre': epc['nombreProducto'],
+          'totalEPCs': 0,
+          'pesoTotal': 0.0,
+          'unidad': epc['claveUnidad'],
+          'pasados': 0,
+          'fallados': 0,
+          'observaciones': 0,
+        };
+      }
+
+      // Incrementar conteo de EPCs
+      productSummary[claveProducto]!['totalEPCs'] =
+          (productSummary[claveProducto]!['totalEPCs'] as int) + 1;
+
+      // Sumar peso
+      final peso = double.tryParse(epc['pesoNeto'].toString()) ?? 0.0;
+      productSummary[claveProducto]!['pesoTotal'] =
+          (productSummary[claveProducto]!['pesoTotal'] as double) + peso;
+
+      // Calcular puntos pasados/fallados
+      bool allPassed = true;
+      bool hasFailed = false;
+      bool hasObservations = false;
+
+      if (reviewStates.containsKey(trazabilidad)) {
+        final points = reviewStates[trazabilidad]!;
+        for (var point in points.values) {
+          if (!point.isApproved) {
+            allPassed = false;
+            hasFailed = true;
+            if (point.comment != null && point.comment!.isNotEmpty) {
+              hasObservations = true;
+            }
+          }
+        }
+      }
+
+      if (allPassed) {
+        productSummary[claveProducto]!['pasados'] =
+            (productSummary[claveProducto]!['pasados'] as int) + 1;
+      } else if (hasFailed) {
+        productSummary[claveProducto]!['fallados'] =
+            (productSummary[claveProducto]!['fallados'] as int) + 1;
+      }
+
+      if (hasObservations) {
+        productSummary[claveProducto]!['observaciones'] =
+            (productSummary[claveProducto]!['observaciones'] as int) + 1;
+      }
+    }
+
+    return showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Container(
-          padding: EdgeInsets.all(24),
-          constraints: BoxConstraints(maxWidth: 500),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Encabezado
-              Row(
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Container(
+              constraints: BoxConstraints(maxWidth: 650, maxHeight: 700),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    hasRejections ? Icons.warning : Icons.check_circle,
-                    color: hasRejections ? errorColor : successColor,
-                    size: 28,
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: Text(
-                      hasRejections
-                          ? 'Confirmar Rechazo'
-                          : 'Confirmar Aprobación',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[800],
-                      ),
+                  // Encabezado del Dialog
+                  Container(
+                    padding: EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      borderRadius:
+                          BorderRadius.vertical(top: Radius.circular(16)),
                     ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 20),
-
-              // Mensaje principal
-              Text(
-                hasRejections
-                    ? '¿Deseas finalizar la revisión? El material será marcado como rechazado.'
-                    : '¿Deseas finalizar y aprobar la revisión de calidad?',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey[700],
-                ),
-              ),
-              SizedBox(height: 24),
-
-              // Resumen de Certificados
-              Text(
-                'Certificados de Calidad:',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[800],
-                ),
-              ),
-              SizedBox(height: 12),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey[200]!),
-                ),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: certificates.length,
-                  itemBuilder: (context, index) {
-                    final entry = certificates.entries.elementAt(index);
-                    return Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          bottom: BorderSide(
-                            color: index < certificates.length - 1
-                                ? Colors.grey[200]!
-                                : Colors.transparent,
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.fact_check,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                        SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Confirmación de Revisión de Calidad',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Resumen y aprobación final',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                      child: Row(
+                      ],
+                    ),
+                  ),
+
+                  // Contenido principal (con scroll)
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: successColor.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              Icons.verified,
-                              color: successColor,
-                              size: 16,
-                            ),
+                          // Información de Logística
+                          _buildInfoSection(
+                            title: 'Información de Logística',
+                            children: [
+                              _buildInfoRow(
+                                icon: Icons.inventory,
+                                label: 'Número de Logística',
+                                value: logisticaNumero,
+                              ),
+                              SizedBox(height: 12),
+                              _buildInfoRow(
+                                icon: Icons.business,
+                                label: 'Cliente',
+                                value: cliente,
+                              ),
+                              SizedBox(height: 12),
+                              _buildInfoRow(
+                                icon: Icons.calendar_today,
+                                label: 'Fecha y Hora',
+                                value: formattedDateTime,
+                              ),
+                            ],
                           ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Producto ${entry.key}',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.grey[700],
+
+                          SizedBox(height: 24),
+
+                          // Selección de estado
+                          _buildInfoSection(
+                            title: 'Decisión de Calidad',
+                            children: [
+                              Text(
+                                'Selecciona el estado final:',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                              SizedBox(height: 16),
+
+                              // Radio buttons para los estados
+                              ...estadosRevisiones
+                                  .map((estado) => RadioListTile<String>(
+                                        title: Text(estado),
+                                        value: estado,
+                                        groupValue: selectedStatus,
+                                        activeColor: estado
+                                                .contains('Rechazado')
+                                            ? errorColor
+                                            : (estado.contains('Observaciones')
+                                                ? warningColor
+                                                : successColor),
+                                        onChanged: (value) {
+                                          setState(() {
+                                            selectedStatus = value!;
+                                          });
+                                        },
+                                      ))
+                                  .toList(),
+
+                              SizedBox(height: 16),
+
+                              // Campo para validador
+                              TextField(
+                                controller: validatorController,
+                                decoration: InputDecoration(
+                                  labelText: 'Persona que Valida *',
+                                  prefixIcon: Icon(Icons.person),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
                                 ),
-                                Text(
-                                  'Cert. ${entry.value.certificateNumber}',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
+                          ),
+
+                          SizedBox(height: 24),
+
+                          // Resumen de productos
+                          _buildInfoSection(
+                            title: 'Resumen de Productos',
+                            children: [
+                              ListView.builder(
+                                shrinkWrap: true,
+                                physics: NeverScrollableScrollPhysics(),
+                                itemCount: productSummary.length,
+                                itemBuilder: (context, index) {
+                                  final entry =
+                                      productSummary.entries.elementAt(index);
+                                  final producto = entry.key;
+                                  final info = entry.value;
+                                  final hasCertificate =
+                                      certificates.containsKey(producto);
+
+                                  return Card(
+                                    margin: EdgeInsets.only(bottom: 16),
+                                    elevation: 1,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: Colors.grey[300]!,
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Padding(
+                                      padding: EdgeInsets.all(16),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      info['nombre'] as String,
+                                                      style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 16,
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      'Clave: $producto',
+                                                      style: TextStyle(
+                                                        color: Colors.grey[700],
+                                                        fontSize: 14,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              Container(
+                                                padding: EdgeInsets.symmetric(
+                                                  horizontal: 12,
+                                                  vertical: 6,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: hasCertificate
+                                                      ? successColor
+                                                          .withOpacity(0.1)
+                                                      : errorColor
+                                                          .withOpacity(0.1),
+                                                  borderRadius:
+                                                      BorderRadius.circular(30),
+                                                ),
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      hasCertificate
+                                                          ? Icons.verified
+                                                          : Icons.warning,
+                                                      size: 16,
+                                                      color: hasCertificate
+                                                          ? successColor
+                                                          : errorColor,
+                                                    ),
+                                                    SizedBox(width: 6),
+                                                    Text(
+                                                      hasCertificate
+                                                          ? 'Certificado'
+                                                          : 'Sin Certificado',
+                                                      style: TextStyle(
+                                                        color: hasCertificate
+                                                            ? successColor
+                                                            : errorColor,
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                        fontSize: 12,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+
+                                          SizedBox(height: 12),
+
+                                          // Información detallada
+                                          Row(
+                                            children: [
+                                              _buildInfoChip(
+                                                label: 'Total EPCs',
+                                                value: info['totalEPCs']
+                                                    .toString(),
+                                                color: accentColor,
+                                              ),
+                                              SizedBox(width: 8),
+                                              _buildInfoChip(
+                                                label: 'Peso Total',
+                                                value:
+                                                    '${(info['pesoTotal'] as double).toStringAsFixed(2)} ${info['unidad']}',
+                                                color: Colors.blue[700]!,
+                                              ),
+                                            ],
+                                          ),
+
+                                          SizedBox(height: 8),
+
+                                          // Resumen de revisiones
+                                          Row(
+                                            children: [
+                                              _buildInfoChip(
+                                                label: 'Pasados',
+                                                value:
+                                                    info['pasados'].toString(),
+                                                color: successColor,
+                                              ),
+                                              SizedBox(width: 8),
+                                              _buildInfoChip(
+                                                label: 'Fallados',
+                                                value:
+                                                    info['fallados'].toString(),
+                                                color: errorColor,
+                                              ),
+                                              SizedBox(width: 8),
+                                              _buildInfoChip(
+                                                label: 'Con Observaciones',
+                                                value: info['observaciones']
+                                                    .toString(),
+                                                color: warningColor,
+                                              ),
+                                            ],
+                                          ),
+
+                                          // Si tiene certificado, mostrar información
+                                          if (hasCertificate) ...[
+                                            SizedBox(height: 12),
+                                            Divider(),
+                                            SizedBox(height: 8),
+                                            Text(
+                                              'Certificado No. ${certificates[producto]!.certificateNumber}',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            if (certificates[producto]!
+                                                .observations
+                                                .isNotEmpty)
+                                              Text(
+                                                'Observaciones: ${certificates[producto]!.observations}',
+                                                style: TextStyle(
+                                                  color: Colors.grey[700],
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(height: 24),
-
-              // Botones
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    child: Text('Cancelar'),
-                    onPressed: () => Navigator.pop(context, false),
-                  ),
-                  SizedBox(width: 16),
-                  ElevatedButton(
-                    child: Text('Confirmar'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                          hasRejections ? errorColor : successColor,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
                     ),
-                    onPressed: () => Navigator.pop(context, true),
+                  ),
+
+                  // Botones de acción
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius:
+                          BorderRadius.vertical(bottom: Radius.circular(16)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text('Cancelar'),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 12),
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        ElevatedButton(
+                          onPressed: () {
+                            if (validatorController.text.trim().isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      'Por favor indica quién realiza la validación'),
+                                  backgroundColor: errorColor,
+                                ),
+                              );
+                              return;
+                            }
+
+                            Navigator.pop(context, {
+                              'status': selectedStatus,
+                              'validator': validatorController.text,
+                              'timestamp': now.toIso8601String(),
+                              'summary': productSummary,
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                selectedStatus.contains('Rechazado')
+                                    ? errorColor
+                                    : (selectedStatus.contains('Observaciones')
+                                        ? warningColor
+                                        : successColor),
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_circle),
+                              SizedBox(width: 8),
+                              Text('Confirmar Revisión'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ],
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  Widget _buildInfoSection({
+    required String title,
+    required List<Widget> children,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800],
+            ),
+          ),
+          SizedBox(height: 16),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+// Widget auxiliar para construir filas de información
+  Widget _buildInfoRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      children: [
+        Container(
+          padding: EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: primaryColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            color: primaryColor,
+            size: 18,
           ),
         ),
+        SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 12,
+              ),
+            ),
+            Text(
+              value,
+              style: TextStyle(
+                fontWeight: FontWeight.w500,
+                fontSize: 15,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+// Widget auxiliar para construir chips de información
+  Widget _buildInfoChip({
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(
+          color: color.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+            ),
+          ),
+          SizedBox(width: 4),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1372,6 +3177,12 @@ class _LogisticsReviewDetailScreenState
   void _showSuccessMessage(String message) {
     if (!mounted) return;
 
+    final Color bgColor = message.contains('rechazada')
+        ? Colors.orange
+        : (message.contains('observaciones')
+            ? Colors.amber[700]!
+            : successColor);
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -1381,7 +3192,7 @@ class _LogisticsReviewDetailScreenState
             Expanded(child: Text(message)),
           ],
         ),
-        backgroundColor: successColor,
+        backgroundColor: bgColor,
         behavior: SnackBarBehavior.floating,
         margin: EdgeInsets.all(16),
         shape: RoundedRectangleBorder(
@@ -1399,14 +3210,14 @@ class _LogisticsReviewDetailScreenState
           'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status',
         ),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode("Material Separado"),
+        body: json.encode({'status': widget.previousStatus}),
       );
 
       if (response.statusCode != 200 && response.statusCode != 201) {
-        print('Error restoring status: ${response.statusCode}');
+        print('Error restaurando estado: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error restoring status: $e');
+      print('Error restaurando estado: $e');
     }
   }
 
@@ -1492,305 +3303,6 @@ class _LogisticsReviewDetailScreenState
     }
   }
 
-  // Cleanup Temp Files
-  Future<void> _cleanupTempFiles() async {
-    for (var trazabilidadStates in reviewStates.values) {
-      for (var reviewPoint in trazabilidadStates.values) {
-        if (reviewPoint.photo != null) {
-          try {
-            await reviewPoint.photo!.delete();
-          } catch (e) {
-            print('Error deleting temp file: $e');
-          }
-        }
-      }
-    }
-  }
-
-  // Take Photo
-  Future<void> _takePhoto(String trazabilidad, String point) async {
-    try {
-      final XFile? photo = await _imagePicker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 85,
-        maxWidth: 1920,
-        maxHeight: 1080,
-      );
-
-      if (photo != null && mounted) {
-        setState(() {
-          reviewStates[trazabilidad]![point]!.photo = File(photo.path);
-          hasUnsavedChanges = true;
-        });
-        _showCommentDialog(trazabilidad, point);
-      }
-    } catch (e) {
-      _showErrorSnackBar('Error al tomar la foto: $e');
-    }
-  }
-
-  // Show Full Screen Image
-  void _showFullScreenImage(File imageFile) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 4.0,
-              child: Hero(
-                tag: imageFile.path,
-                child: Image.file(imageFile),
-              ),
-            ),
-            Positioned(
-              top: -12,
-              right: -12,
-              child: Material(
-                color: Colors.transparent,
-                child: IconButton(
-                  icon: Icon(Icons.close, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Show Comment Dialog
-  void _showCommentDialog(String trazabilidad, String point) {
-    final reviewPoint = reviewStates[trazabilidad]![point]!;
-    final commentController = TextEditingController(text: reviewPoint.comment);
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.warning, color: warningColor),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text('Indicar motivo de no cumplimiento'),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(point),
-              SizedBox(height: 16),
-              TextField(
-                controller: commentController,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: '¿Por qué no cumple con este punto?',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  filled: true,
-                ),
-                autofocus: true,
-              ),
-              if (reviewPoint.photo != null) ...[
-                SizedBox(height: 16),
-                Text('Foto adjunta:'),
-                SizedBox(height: 8),
-                InkWell(
-                  onTap: () => _showFullScreenImage(reviewPoint.photo!),
-                  child: Hero(
-                    tag: reviewPoint.photo!.path,
-                    child: Image.file(
-                      reviewPoint.photo!,
-                      height: 150,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              setState(() {
-                reviewPoint.isApproved = true;
-                reviewPoint.comment = null;
-                reviewPoint.photo = null;
-              });
-              Navigator.pop(context);
-            },
-            child: Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (commentController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Por favor, indica el motivo'),
-                    backgroundColor: errorColor,
-                  ),
-                );
-                return;
-              }
-              setState(() {
-                reviewPoint.comment = commentController.text;
-                hasUnsavedChanges = true;
-              });
-              Navigator.pop(context);
-            },
-            child: Text('Guardar'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Build Review Category
-  Widget _buildReviewCategory(
-      String categoryName, List<String> points, String trazabilidad) {
-    return Container(
-      margin: EdgeInsets.only(bottom: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            categoryName,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[800],
-            ),
-          ),
-          SizedBox(height: 12),
-          ...points.map((point) => _buildCheckboxItem(point, trazabilidad)),
-        ],
-      ),
-    );
-  }
-
-  // Build Checkbox Item
-  Widget _buildCheckboxItem(String point, String trazabilidad) {
-    final reviewPoint = reviewStates[trazabilidad]![point]!;
-
-    return Card(
-      margin: EdgeInsets.symmetric(vertical: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    point,
-                    style: TextStyle(fontSize: 16),
-                  ),
-                ),
-                Switch(
-                  value: reviewPoint.isApproved,
-                  onChanged: (value) {
-                    setState(() {
-                      reviewPoint.isApproved = value;
-                      hasUnsavedChanges = true;
-                      if (!value) {
-                        _showCommentDialog(trazabilidad, point);
-                      } else {
-                        reviewPoint.comment = null;
-                        reviewPoint.photo = null;
-                      }
-                    });
-                  },
-                  activeColor: successColor,
-                ),
-              ],
-            ),
-            if (!reviewPoint.isApproved && reviewPoint.comment != null) ...[
-              Divider(),
-              Text(
-                'Motivo:',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[700],
-                ),
-              ),
-              SizedBox(height: 4),
-              Text(reviewPoint.comment!),
-              if (reviewPoint.photo != null) ...[
-                SizedBox(height: 8),
-                InkWell(
-                  onTap: () => _showFullScreenImage(reviewPoint.photo!),
-                  child: Hero(
-                    tag: reviewPoint.photo!.path,
-                    child: Image.file(
-                      reviewPoint.photo!,
-                      height: 120,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Main Build Method
-  @override
-  Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: Scaffold(
-        backgroundColor: backgroundColor,
-        appBar: AppBar(
-          elevation: 0,
-          backgroundColor: primaryColor,
-          title: Text('Detalle de Revisión'),
-          actions: [
-            if (!isLoading)
-              IconButton(
-                icon: Icon(Icons.save),
-                onPressed: _saveReview,
-                tooltip: 'Guardar Revisión',
-              ),
-          ],
-        ),
-        body: SafeArea(
-          child: isLoading
-              ? Center(child: CircularProgressIndicator())
-              : errorMessage != null
-                  ? _buildErrorView()
-                  : _buildMainContent(),
-        ),
-        floatingActionButton: _showBackToTop
-            ? FloatingActionButton(
-                onPressed: _scrollToTop,
-                child: Icon(Icons.arrow_upward),
-                mini: true,
-              )
-            : null,
-      ),
-    );
-  }
-
   // Build Main Content
   Widget _buildMainContent() {
     return RefreshIndicator(
@@ -1840,6 +3352,44 @@ class _LogisticsReviewDetailScreenState
             child: Text('Reintentar'),
           ),
         ],
+      ),
+    );
+  }
+
+  // Main Build Method
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        backgroundColor: backgroundColor,
+        appBar: AppBar(
+          elevation: 0,
+          backgroundColor: primaryColor,
+          title: Text('Detalle de Revisión'),
+          actions: [
+            if (!isLoading)
+              IconButton(
+                icon: Icon(Icons.save),
+                onPressed: _saveReview,
+                tooltip: 'Guardar Revisión',
+              ),
+          ],
+        ),
+        body: SafeArea(
+          child: isLoading
+              ? Center(child: CircularProgressIndicator())
+              : errorMessage != null
+                  ? _buildErrorView()
+                  : _buildMainContent(),
+        ),
+        floatingActionButton: _showBackToTop
+            ? FloatingActionButton(
+                onPressed: _scrollToTop,
+                child: Icon(Icons.arrow_upward),
+                mini: true,
+              )
+            : null,
       ),
     );
   }

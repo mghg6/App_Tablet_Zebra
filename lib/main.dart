@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:zebra_scanner_app/AduanalistScreen.dart';
 import 'package:zebra_scanner_app/LogisticaListScreen.dart';
 import 'package:zebra_scanner_app/logistics_review_screen.dart';
 import 'package:zebra_scanner_app/scanandcapture.dart';
@@ -123,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     MenuOption(
       title: 'Evidencias',
       icon: Icons.photo_library,
-      screen: ScanAndCapture(),
+      screen: AduanaReviewScreen(),
     ),
     MenuOption(
       title: 'Logísticas',

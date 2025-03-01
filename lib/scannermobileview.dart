@@ -1,8 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'models/epc_info.dart';
+
+class Config {
+  static const String url_esp32 =
+      'http://172.16.20.125:80'; // url ESP32 corregida
+  static const String url_api_rfid = 'http://172.16.10.31'; // url API
+}
 
 class Ubicacion {
   final int idUbicacion;
@@ -27,14 +35,22 @@ class ScannerMobileView extends StatefulWidget {
 }
 
 class _ScannerMobileViewState extends State<ScannerMobileView> {
-  List<Map<String, dynamic>> scannedTags = [];
+  List<EPCInfo> scannedTags = [];
   String lastScannedTag = "Escáner activado, esperando lectura...";
   bool isLoading = false;
   bool isConnected = false;
   String connectionStatus = "Verificando conexión...";
   Timer? _connectionTimer;
   Timer? _autoReadTimer;
+  Timer? _keepAliveTimer;
   bool isAutoReading = false;
+
+  // Variables para registro de conexión
+  int _connectionAttempts = 0;
+  int _disconnectionCount = 0;
+  DateTime? _lastConnectionTime;
+  DateTime? _lastDisconnectionTime;
+  List<String> _connectionLog = [];
 
   List<Ubicacion> ubicaciones = [];
   Ubicacion? selectedUbicacion;
@@ -43,12 +59,24 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
   final dateController = TextEditingController();
   final operatorController = TextEditingController();
   final fileNameController = TextEditingController();
+  String selectedFormat = 'Inventario PT';
+
+  final List<String> formatOptions = [
+    'Inventario PT',
+    'Inventario MP',
+    'ExcelGeneral'
+  ];
 
   @override
   void initState() {
     super.initState();
+    _logConnection("Iniciando aplicación");
     _checkConnection();
     fetchUbicaciones();
+    // Inicializar la fecha actual
+    dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+    // Configurar un temporizador para revisar periódicamente la conexión
     _connectionTimer = Timer.periodic(Duration(seconds: 10), (timer) {
       _checkConnection();
     });
@@ -58,37 +86,120 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
   void dispose() {
     _connectionTimer?.cancel();
     _autoReadTimer?.cancel();
+    _keepAliveTimer?.cancel();
     dateController.dispose();
     operatorController.dispose();
     fileNameController.dispose();
     super.dispose();
   }
 
+  // Función de log mejorada
+  void _logConnection(String message) {
+    String timestamp = DateFormat('HH:mm:ss.SSS').format(DateTime.now());
+    String logMessage = "[$timestamp] $message";
+    print(logMessage);
+
+    setState(() {
+      _connectionLog.add(logMessage);
+      // Mantener solo los últimos 100 mensajes
+      if (_connectionLog.length > 100) {
+        _connectionLog.removeAt(0);
+      }
+    });
+  }
+
+  // Función para verificar conexión con logging
   Future<void> _checkConnection() async {
     try {
+      _logConnection("Verificando conexión con ${Config.url_esp32}/status...");
       final response = await http
           .get(
-            Uri.parse('http://172.16.20.172:80/status'),
+            Uri.parse('${Config.url_esp32}/status'),
           )
           .timeout(Duration(seconds: 5));
 
+      _logConnection(
+          "Respuesta recibida: ${response.statusCode} - ${response.body}");
+
+      bool wasConnected = isConnected;
       setState(() {
         isConnected = response.statusCode == 200;
         connectionStatus =
             isConnected ? "Lector RFID conectado" : "Lector RFID desconectado";
       });
+
+      // Registrar cambios de estado
+      if (isConnected && !wasConnected) {
+        _lastConnectionTime = DateTime.now();
+        _connectionAttempts++;
+        _logConnection(
+            "🟢 Conexión establecida. Intento #$_connectionAttempts");
+      } else if (!isConnected && wasConnected) {
+        _lastDisconnectionTime = DateTime.now();
+        _disconnectionCount++;
+        _logConnection(
+            "🔴 Conexión perdida. Desconexión #$_disconnectionCount");
+
+        // Si estaba conectado y se desconectó, intentar reconectar
+        _logConnection("Intentando reconexión automática...");
+        _conectarYParpadearLED();
+      }
     } catch (e) {
-      setState(() {
-        isConnected = false;
-        connectionStatus = "Error de conexión: ${e.toString().split('\n')[0]}";
-      });
+      _logConnection("❌ Error en checkConnection: ${e.toString()}");
+      if (isConnected) {
+        setState(() {
+          isConnected = false;
+          connectionStatus =
+              "Error de conexión: ${e.toString().split('\n')[0]}";
+        });
+
+        _lastDisconnectionTime = DateTime.now();
+        _disconnectionCount++;
+        _logConnection(
+            "🔴 Conexión perdida por error. Desconexión #$_disconnectionCount");
+
+        // Intentar reconectar
+        _logConnection("Intentando reconexión automática después de error...");
+        _conectarYParpadearLED();
+      }
     }
+  }
+
+  // Función para mantener la conexión activa con pings periódicos
+  void _startKeepAlivePing() {
+    // Cancelar cualquier timer existente
+    _keepAliveTimer?.cancel();
+
+    // Crear un nuevo timer que envía pings cada 5 segundos
+    _keepAliveTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
+      if (isConnected) {
+        try {
+          _logConnection("Enviando ping de mantener-vivo...");
+          final response = await http
+              .get(Uri.parse('${Config.url_esp32}/status'))
+              .timeout(Duration(seconds: 3));
+
+          if (response.statusCode == 200) {
+            _logConnection("Ping exitoso, conexión mantenida");
+          } else {
+            _logConnection("❌ Ping falló con código: ${response.statusCode}");
+            _checkConnection();
+          }
+        } catch (e) {
+          _logConnection("❌ Error en ping de mantener-vivo: $e");
+          _checkConnection();
+        }
+      } else {
+        _logConnection(
+            "No se envía ping porque el dispositivo está desconectado");
+      }
+    });
   }
 
   Future<void> fetchUbicaciones() async {
     try {
       final response = await http.get(
-        Uri.parse("http://172.16.10.31/api/Ubicacion/GetUbicaciones"),
+        Uri.parse("${Config.url_api_rfid}/api/Ubicacion/GetUbicaciones"),
       );
 
       if (response.statusCode == 200) {
@@ -115,6 +226,80 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     });
   }
 
+  // Función para vincular el dispositivo con logging
+  Future<void> _conectarYParpadearLED() async {
+    _logConnection("Iniciando conexión con el lector RFID...");
+    try {
+      final response = await http
+          .get(Uri.parse('${Config.url_esp32}/blinkLED'))
+          .timeout(Duration(seconds: 10));
+
+      _logConnection(
+          "Respuesta de blinkLED: ${response.statusCode} - ${response.body}");
+
+      if (response.statusCode == 200) {
+        // Enviar múltiples parpadeos para confirmar la conexión
+        _logConnection(
+            "Enviando confirmación de conexión (parpadeos adicionales)");
+        await http.get(Uri.parse('${Config.url_esp32}/blinkLED'));
+        await http.get(Uri.parse('${Config.url_esp32}/blinkLED'));
+
+        setState(() {
+          isConnected = true;
+          connectionStatus = "Lector RFID conectado";
+        });
+
+        _lastConnectionTime = DateTime.now();
+        _connectionAttempts++;
+        _logConnection(
+            "🟢 Conexión establecida correctamente. Intento #$_connectionAttempts");
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white),
+                  SizedBox(width: 10),
+                  Text('Conexión exitosa con el Lector RFID'),
+                ],
+              ),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+
+        // Iniciar un ping periódico para mantener la conexión activa
+        _startKeepAlivePing();
+      } else {
+        _logConnection("❌ Error de respuesta: ${response.statusCode}");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Error al conectar con el ESP32: Código ${response.statusCode}'),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      _logConnection("❌ Excepción al conectar: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al conectar con el ESP32: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  // Función para leer EPC con logging mejorado
   Future<void> _leerEPC() async {
     if (!isConnected) {
       if (!isAutoReading) {
@@ -124,65 +309,72 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     }
 
     try {
+      _logConnection("Leyendo etiqueta RFID...");
       final response = await http
-          .get(
-            Uri.parse('http://172.16.20.172:80/readTag}'),
-          )
+          .get(Uri.parse('${Config.url_esp32}/readTag'))
           .timeout(Duration(seconds: 5));
+
+      _logConnection(
+          "Respuesta de lectura: ${response.statusCode} - ${response.body}");
 
       if (response.statusCode == 200 && response.body.isNotEmpty) {
         String epc = response.body;
-        if (!scannedTags.any((tag) => tag['trazabilidad'] == epc)) {
+        if (!scannedTags.any((tag) => tag.epc == epc)) {
           setState(() {
             lastScannedTag = "Procesando: $epc";
           });
-          await fetchPalletData(epc);
+          try {
+            _logConnection("Solicitando info para EPC: $epc");
+            final epcInfo = await _getEPCInfo(epc);
+            _logConnection("Info recibida: ${epcInfo.claveProducto}");
+
+            setState(() {
+              scannedTags.add(epcInfo);
+              lastScannedTag = "✓ Etiqueta registrada: $epc";
+            });
+
+            showSnackBar("Etiqueta registrada correctamente");
+            HapticFeedback.mediumImpact();
+          } catch (e) {
+            _logConnection("❌ Error al obtener información del EPC: $e");
+            showSnackBar("Error al obtener información del EPC: $e",
+                isError: true);
+          }
         }
       }
     } catch (e) {
+      _logConnection("❌ Error al leer EPC: $e");
       if (!isAutoReading) {
         showSnackBar('Error al leer EPC: $e', isError: true);
+      }
+
+      // Verificar si la conexión se perdió
+      if (isConnected) {
+        _checkConnection();
       }
     }
   }
 
-  Future<void> fetchPalletData(String epc) async {
-    setState(() {
-      isLoading = true;
-    });
-
+  Future<EPCInfo> _getEPCInfo(String epc) async {
     try {
+      _logConnection('Obteniendo información para EPC: $epc');
       final response = await http.get(
-        Uri.parse("http://172.16.10.31/api/Socket/$epc"),
+        Uri.parse('${Config.url_api_rfid}/api/Socket/prueba/$epc'),
       );
 
+      _logConnection('Status Code: ${response.statusCode}');
+      _logConnection('Response body: ${response.body}');
+
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data != null) {
-          final tagInfo = {
-            'claveProducto': data['claveProducto'] ?? 'N/A',
-            'pesoNeto': data['pesoNeto'] ?? 'N/A',
-            'piezas': data['piezas'] ?? 'N/A',
-            'trazabilidad': epc,
-          };
-
-          setState(() {
-            scannedTags.add(tagInfo);
-            lastScannedTag = "✓ Etiqueta registrada: $epc";
-          });
-
-          showSnackBar("Etiqueta registrada correctamente");
-          HapticFeedback.mediumImpact();
-        }
+        final data = json.decode(response.body);
+        return EPCInfo.fromJson(data);
       } else {
-        showSnackBar("Error: Tarima no encontrada", isError: true);
+        throw Exception(
+            'Error al obtener información del EPC: Status ${response.statusCode}');
       }
     } catch (e) {
-      showSnackBar("Error de conexión: $e", isError: true);
-    } finally {
-      setState(() {
-        isLoading = false;
-      });
+      _logConnection('Error en _getEPCInfo: $e');
+      throw Exception('Error de conexión: $e');
     }
   }
 
@@ -194,23 +386,32 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     });
 
     try {
+      DateTime parsedDate = DateFormat('yyyy-MM-dd').parse(dateController.text);
+      String formattedDate = parsedDate.toUtc().toIso8601String();
+
+      final jsonData = {
+        "epcs": scannedTags.map((e) => e.epc).toList(),
+        "fechaInventario": formattedDate,
+        "formatoEtiqueta": selectedFormat,
+        "operador": operatorController.text,
+        "ubicacion": selectedUbicacion?.claveUbicacion ?? '',
+        "nombreArchivo": fileNameController.text,
+      };
+
+      _logConnection("Enviando datos al servidor: ${json.encode(jsonData)}");
+
       final response = await http.post(
         Uri.parse(
-            "http://172.16.10.31/api/RfidLabel/generate-excel-from-handheld-save-inventory"),
+            "${Config.url_api_rfid}/api/RfidLabel/generate-excel-from-handheld-save-inventory"),
         headers: {
           "Content-Type": "application/json",
-          "accept": "*/*",
+          "Accept": "application/json",
         },
-        body: jsonEncode({
-          "epcs":
-              scannedTags.map((tag) => tag['trazabilidad'] as String).toList(),
-          "fechaInventario": dateController.text,
-          "formatoEtiqueta": "Inventario",
-          "operador": operatorController.text,
-          "ubicacion": selectedUbicacion?.claveUbicacion,
-          "nombreArchivo": fileNameController.text,
-        }),
+        body: json.encode(jsonData),
       );
+
+      _logConnection(
+          "Respuesta del servidor: ${response.statusCode} - ${response.body}");
 
       if (response.statusCode == 200) {
         showSnackBar("Información enviada correctamente");
@@ -221,6 +422,7 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
             isError: true);
       }
     } catch (e) {
+      _logConnection("❌ Error al enviar información: $e");
       showSnackBar("Error de conexión: $e", isError: true);
     } finally {
       setState(() {
@@ -232,10 +434,11 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
   void resetForm() {
     setState(() {
       scannedTags.clear();
-      dateController.clear();
+      dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
       operatorController.clear();
       fileNameController.clear();
       selectedUbicacion = null;
+      selectedFormat = 'Inventario PT';
       lastScannedTag = "Escáner activado, esperando lectura...";
     });
   }
@@ -260,18 +463,33 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('Confirmación'),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          title: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.orange),
+              SizedBox(width: 10),
+              Text('Confirmación'),
+            ],
+          ),
           content: Text('¿Desea eliminar todos los elementos escaneados?'),
           actions: [
-            TextButton(
-              child: Text('Cancelar'),
+            TextButton.icon(
+              icon: Icon(Icons.cancel),
+              label: Text('Cancelar'),
               onPressed: () => Navigator.of(context).pop(false),
             ),
-            ElevatedButton(
+            ElevatedButton.icon(
+              icon: Icon(Icons.delete),
+              label: Text('Eliminar'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
-              child: Text('Borrar todo'),
               onPressed: () => Navigator.of(context).pop(true),
             ),
           ],
@@ -297,7 +515,7 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: ColorScheme.light(
-              primary: Colors.teal,
+              primary: Color.fromARGB(255, 20, 71, 71),
             ),
           ),
           child: child!,
@@ -307,8 +525,7 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
 
     if (picked != null) {
       setState(() {
-        dateController.text =
-            "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+        dateController.text = DateFormat('yyyy-MM-dd').format(picked);
       });
     }
   }
@@ -331,7 +548,7 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
             ),
           ],
         ),
-        backgroundColor: isError ? Colors.red : Colors.teal,
+        backgroundColor: isError ? Colors.red : Color.fromARGB(255, 20, 71, 71),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
@@ -342,15 +559,141 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     );
   }
 
-  void mostrarFormularioEnvio() {
+  void _showEPCDetails(EPCInfo epcInfo) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          title: Row(
+            children: [
+              Icon(Icons.info_outline, color: Color.fromARGB(255, 20, 71, 71)),
+              SizedBox(width: 10),
+              Text('Detalles de la Tarima'),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDetailRow('ID', epcInfo.id.toString()),
+                _buildDetailRow('Área', epcInfo.area),
+                _buildDetailRow('Producto', epcInfo.nombreProducto),
+                _buildDetailRow('Clave Producto', epcInfo.claveProducto),
+                _buildDetailRow('Peso Bruto', '${epcInfo.pesoBruto} kg'),
+                _buildDetailRow('Peso Neto', '${epcInfo.pesoNeto} kg'),
+                _buildDetailRow('Piezas', epcInfo.piezas.toString()),
+                _buildDetailRow('Orden', epcInfo.orden),
+                _buildDetailRow('Clave Unidad', epcInfo.claveUnidad),
+                _buildDetailRow('Status', epcInfo.status.toString()),
+              ],
+            ),
+          ),
+          actions: [
+            ElevatedButton.icon(
+              icon: Icon(Icons.close),
+              label: Text('Cerrar'),
+              onPressed: () => Navigator.of(context).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color.fromARGB(255, 20, 71, 71),
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              '$label:',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Color.fromARGB(255, 20, 71, 71),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(fontSize: 15),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Mostrar logs de conexión
+  void _mostrarLogsDeConexion() {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        title: Text("Logs de Conexión"),
+        content: Container(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: _connectionLog.length,
+            itemBuilder: (context, index) {
+              return Text(
+                _connectionLog[index],
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: _connectionLog[index].contains("❌")
+                      ? Colors.red
+                      : (_connectionLog[index].contains("🟢")
+                          ? Colors.green
+                          : Colors.black),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Cerrar"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void mostrarFormularioEnvio() {
+    // Establecer valores iniciales
+    dateController.text = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(15),
+        ),
         title: Row(
           children: [
-            Icon(Icons.inventory, color: Colors.teal),
-            SizedBox(width: 8),
-            Text("Enviar Inventario"),
+            Icon(Icons.edit_document, color: Color.fromARGB(255, 20, 71, 71)),
+            SizedBox(width: 10),
+            Text("Datos de Lectura"),
           ],
         ),
         content: Form(
@@ -359,105 +702,156 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildDateField(),
-                SizedBox(height: 16),
-                _buildFormField(
-                  controller: operatorController,
-                  label: "Operador",
-                  icon: Icons.person,
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: TextFormField(
+                      controller: dateController,
+                      decoration: InputDecoration(
+                        labelText: 'Fecha',
+                        prefixIcon: Icon(Icons.calendar_today),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      readOnly: true,
+                      onTap: () => _selectDate(context),
+                      validator: (value) =>
+                          value?.isEmpty ?? true ? 'Campo requerido' : null,
+                    ),
+                  ),
                 ),
                 SizedBox(height: 16),
-                _buildUbicacionDropdown(),
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: DropdownButtonFormField<String>(
+                      value: selectedFormat,
+                      decoration: InputDecoration(
+                        labelText: 'Formato',
+                        prefixIcon: Icon(Icons.format_list_bulleted),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      items: formatOptions.map((String format) {
+                        return DropdownMenuItem(
+                          value: format,
+                          child: Text(format),
+                        );
+                      }).toList(),
+                      onChanged: (String? newValue) {
+                        setState(() {
+                          selectedFormat = newValue!;
+                        });
+                      },
+                    ),
+                  ),
+                ),
                 SizedBox(height: 16),
-                _buildFormField(
-                  controller: fileNameController,
-                  label: "Nombre del Archivo",
-                  icon: Icons.file_present,
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: TextFormField(
+                      controller: operatorController,
+                      decoration: InputDecoration(
+                        labelText: 'Operador',
+                        prefixIcon: Icon(Icons.person),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      validator: (value) =>
+                          value?.isEmpty ?? true ? 'Campo requerido' : null,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 16),
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: DropdownButtonFormField<Ubicacion>(
+                      value: selectedUbicacion,
+                      decoration: InputDecoration(
+                        labelText: 'Ubicación',
+                        prefixIcon: Icon(Icons.location_on),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      items: ubicaciones.map((ubicacion) {
+                        return DropdownMenuItem(
+                          value: ubicacion,
+                          child: Text(ubicacion.claveUbicacion),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          selectedUbicacion = value;
+                        });
+                      },
+                      validator: (value) =>
+                          value == null ? 'Seleccione una ubicación' : null,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 16),
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: TextFormField(
+                      controller: fileNameController,
+                      decoration: InputDecoration(
+                        labelText: 'Nombre del archivo',
+                        prefixIcon: Icon(Icons.file_present),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      validator: (value) =>
+                          value?.isEmpty ?? true ? 'Campo requerido' : null,
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
         ),
         actions: [
-          TextButton(
+          TextButton.icon(
+            icon: Icon(Icons.cancel_outlined, color: Colors.grey),
+            label: Text('Cancelar'),
             onPressed: () => Navigator.pop(context),
-            child: Text('Cancelar'),
           ),
-          ElevatedButton(
+          ElevatedButton.icon(
+            icon: Icon(Icons.save),
+            label: Text('Guardar'),
             onPressed: enviarInformacion,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal,
+              backgroundColor: Color.fromARGB(255, 20, 71, 71),
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
-            child: Text('Guardar'),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildDateField() {
-    return InkWell(
-      onTap: () => _selectDate(context),
-      child: AbsorbPointer(
-        child: _buildFormField(
-          controller: dateController,
-          label: "Fecha de Inventario",
-          icon: Icons.calendar_today,
-          hint: "YYYY-MM-DD",
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFormField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    String? hint,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: TextField(
-        controller: controller,
-        decoration: InputDecoration(
-          labelText: label,
-          hintText: hint,
-          prefixIcon: Icon(icon, color: Colors.teal),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUbicacionDropdown() {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: DropdownButtonFormField<Ubicacion>(
-        value: selectedUbicacion,
-        decoration: InputDecoration(
-          labelText: "Ubicación",
-          prefixIcon: Icon(Icons.place, color: Colors.teal),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        ),
-        items: ubicaciones.map((ubicacion) {
-          return DropdownMenuItem(
-            value: ubicacion,
-            child: Text(ubicacion.claveUbicacion),
-          );
-        }).toList(),
-        onChanged: (value) {
-          setState(() {
-            selectedUbicacion = value;
-          });
-        },
       ),
     );
   }
@@ -502,288 +896,299 @@ class _ScannerMobileViewState extends State<ScannerMobileView> {
     );
   }
 
-  Widget _buildDetailRow({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: Colors.teal),
-        SizedBox(width: 8),
-        Text(
-          "$label:",
-          style: TextStyle(
-            fontWeight: FontWeight.w500,
-            color: Colors.grey.shade700,
-          ),
-        ),
-        SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              color: Colors.grey.shade900,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.teal,
-        elevation: 0,
-        title: Text('Scanner Mobile'),
+        elevation: 2,
+        backgroundColor: Color.fromARGB(255, 20, 71, 71),
+        title: Row(
+          children: [
+            Icon(Icons.nfc, size: 28, color: Colors.white),
+            SizedBox(width: 10),
+            Text(
+              'Lector RFID',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            icon: Icon(Icons.refresh),
+            icon: Icon(Icons.refresh, color: Colors.white),
             onPressed: _checkConnection,
             tooltip: 'Verificar conexión',
           ),
           IconButton(
-            icon: Icon(Icons.send),
-            onPressed: mostrarFormularioEnvio,
-            tooltip: 'Enviar datos',
+            icon: Icon(Icons.report, color: Colors.white),
+            onPressed: _mostrarLogsDeConexion,
+            tooltip: 'Ver logs de conexión',
+          ),
+          Container(
+            margin: EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              color: const Color.fromARGB(255, 255, 255, 255),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: IconButton(
+              icon: Icon(Icons.add_circle_outline),
+              tooltip: 'Agregar Registro',
+              onPressed: mostrarFormularioEnvio,
+            ),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          _buildConnectionStatus(),
-          Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    icon: Icon(Icons.delete),
-                    label: Text('Limpiar'),
-                    onPressed: _confirmarBorrarTodo,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    icon: Icon(Icons.nfc),
-                    label: Text(isAutoReading ? 'Leyendo...' : 'Leer EPC'),
-                    onPressed: isAutoReading ? null : _leerEPC,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                          isAutoReading ? Colors.grey : Colors.teal,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.blue[50]!, Colors.white],
           ),
-          Card(
-            margin: EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              padding: EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.teal.shade100,
-                          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          children: [
+            // Sección de Conexión
+            Card(
+              margin: EdgeInsets.all(16.0),
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(16.0),
+                child: ElevatedButton.icon(
+                  icon: Icon(Icons.wifi, color: Colors.white),
+                  label: Text(
+                    'Vincular dispositivo',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  onPressed: _conectarYParpadearLED,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color.fromARGB(255, 20, 71, 71),
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            _buildConnectionStatus(),
+
+            // Sección de Botones de Acción
+            Card(
+              margin: EdgeInsets.symmetric(horizontal: 16.0),
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: Icon(Icons.delete, color: Colors.white),
+                        label: Text(
+                          'Limpiar Datos',
+                          style: TextStyle(fontSize: 16),
                         ),
-                        child: Icon(
-                          Icons.sensors,
-                          color: Colors.teal,
-                          size: 24,
+                        onPressed: _confirmarBorrarTodo,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
+                    ),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: Icon(Icons.nfc, color: Colors.white),
+                        label: Text(
+                          isAutoReading ? 'Leyendo...' : 'Leer Etiqueta',
+                          style: TextStyle(fontSize: 16),
+                        ),
+                        onPressed: isAutoReading ? null : _leerEPC,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              isAutoReading ? Colors.grey : Color(0xFF4CAF50),
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Contador de EPCs
+            Card(
+              margin: EdgeInsets.all(16.0),
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Container(
+                padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Total EPCs leídos: ${scannedTags.length}',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color.fromARGB(255, 20, 71, 71),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Lista de EPCs
+            Expanded(
+              child: Card(
+                margin: EdgeInsets.all(16),
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: scannedTags.isEmpty
+                    ? Center(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
-                              lastScannedTag,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
+                            Icon(
+                              Icons.nfc_rounded,
+                              size: 64,
+                              color: Colors.grey[300],
                             ),
-                            SizedBox(height: 4),
+                            SizedBox(height: 16),
                             Text(
-                              "Total etiquetas: ${scannedTags.length}",
+                              'No hay lecturas',
                               style: TextStyle(
-                                color: Colors.grey.shade600,
-                                fontSize: 14,
+                                fontSize: 18,
+                                color: Colors.grey[400],
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Expanded(
-            child: Container(
-              margin: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.2),
-                    spreadRadius: 1,
-                    blurRadius: 5,
-                    offset: Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: isLoading
-                  ? Center(child: CircularProgressIndicator(color: Colors.teal))
-                  : scannedTags.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.nfc,
-                                size: 64,
-                                color: Colors.grey.shade400,
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                "No hay etiquetas escaneadas",
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.grey.shade600,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.separated(
-                          itemCount: scannedTags.length,
-                          separatorBuilder: (context, index) =>
-                              Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final tag = scannedTags[index];
-                            return Dismissible(
-                              key: Key(tag['trazabilidad']),
-                              direction: DismissDirection.endToStart,
-                              background: Container(
-                                alignment: Alignment.centerRight,
-                                padding: EdgeInsets.only(right: 20),
-                                decoration: BoxDecoration(
-                                  color: Colors.red.shade400,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.white,
-                                  size: 30,
-                                ),
-                              ),
-                              onDismissed: (direction) {
-                                setState(() {
-                                  scannedTags.removeAt(index);
-                                });
-                                showSnackBar(
-                                  "Etiqueta eliminada",
-                                  isError: false,
-                                );
-                              },
-                              child: Card(
-                                elevation: 2,
-                                margin: EdgeInsets.symmetric(
-                                    vertical: 6, horizontal: 8),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(
-                                    color: Colors.teal.shade100,
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                      colors: [
-                                        Colors.white,
-                                        Colors.teal.shade50
-                                      ],
-                                    ),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: ExpansionTile(
-                                    leading: CircleAvatar(
-                                      backgroundColor: Colors.teal.shade100,
-                                      child: Text(
-                                        '${index + 1}',
-                                        style: TextStyle(
-                                          color: Colors.teal.shade700,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                    title: Text(
-                                      "Clave: ${tag['claveProducto']}",
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.teal.shade700,
-                                      ),
-                                    ),
-                                    subtitle: Text(
-                                      "Peso: ${tag['pesoNeto']} kg",
-                                      style: TextStyle(
-                                          color: Colors.grey.shade700),
-                                    ),
-                                    children: [
-                                      Padding(
-                                        padding: EdgeInsets.all(16),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            _buildDetailRow(
-                                              icon: Icons.numbers,
-                                              label: "Piezas",
-                                              value: "${tag['piezas']}",
-                                            ),
-                                            SizedBox(height: 8),
-                                            _buildDetailRow(
-                                              icon: Icons.qr_code,
-                                              label: "Trazabilidad",
-                                              value: "${tag['trazabilidad']}",
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
+                      )
+                    : ListView.separated(
+                        padding: EdgeInsets.all(8),
+                        itemCount: scannedTags.length,
+                        separatorBuilder: (context, index) => Divider(
+                          height: 1,
+                          color: Colors.grey[300],
                         ),
+                        itemBuilder: (context, index) {
+                          final epcInfo = scannedTags[index];
+                          return Dismissible(
+                            key: Key(epcInfo.epc),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              padding: EdgeInsets.only(right: 20),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade400,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.delete_outline,
+                                color: Colors.white,
+                                size: 30,
+                              ),
+                            ),
+                            onDismissed: (direction) {
+                              setState(() {
+                                scannedTags.removeAt(index);
+                              });
+                              showSnackBar(
+                                "Etiqueta eliminada",
+                                isError: false,
+                              );
+                            },
+                            child: ListTile(
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              leading: Icon(
+                                Icons.nfc,
+                                color: Color.fromARGB(255, 20, 71, 71),
+                                size: 28,
+                              ),
+                              title: Text(
+                                epcInfo.epc,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Clave Producto: ${epcInfo.claveProducto}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Color.fromARGB(255, 20, 71, 71),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.info_outline,
+                                      color: Color.fromARGB(255, 20, 71, 71),
+                                    ),
+                                    onPressed: () => _showEPCDetails(epcInfo),
+                                  ),
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.delete_outline,
+                                      color: Colors.red,
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        scannedTags.removeAt(index);
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                              onTap: () => _showEPCDetails(epcInfo),
+                            ),
+                          );
+                        },
+                      ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

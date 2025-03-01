@@ -10,10 +10,32 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:math' as math;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:intl/intl.dart';
-import 'package:excel/excel.dart';
+// Añadir prefijo 'xl' a la importación de Excel
+import 'package:excel/excel.dart' as xl;
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:http_parser/http_parser.dart';
 
 class ScanAndCapture extends StatefulWidget {
+  final int? reviewId;
+  final int? noLogistica;
+  final String? cliente;
+  final String? operador;
+  final List<String>? trazabilidadesList;
+  final bool aduanaReview;
+  final String? reviewStatus;
+  final String? previousStatus; // Estado anterior
+
+  ScanAndCapture({
+    Key? key,
+    this.reviewId,
+    this.noLogistica,
+    this.cliente,
+    this.operador,
+    this.trazabilidadesList,
+    this.aduanaReview = false,
+    this.reviewStatus,
+    this.previousStatus,
+  }) : super(key: key);
   @override
   _ScanAndCaptureState createState() => _ScanAndCaptureState();
 }
@@ -30,6 +52,20 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
   final TextEditingController operadorController = TextEditingController();
   final TextEditingController noLogisticaController = TextEditingController();
   final TextEditingController observacionesController = TextEditingController();
+  bool isLoading = false;
+  // Campos adicionales para la revisión de aduana
+  final TextEditingController documentacionController = TextEditingController();
+  bool isAduanaReview = false;
+
+  // Variables para el checklist de aduana
+  Map<String, bool> aduanaChecklist = {
+    'documentacion_correcta': false,
+    'sellos_completos': false,
+    'embalaje_correcto': false,
+    'etiquetado_aduana_correcto': false,
+    'peso_bruto_correcto': false
+  };
+
   final ImagePicker _imagePicker = ImagePicker();
 
   @override
@@ -37,6 +73,27 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _enableScanner();
+
+    // Inicializar con los datos de revisión de aduana si los hay
+    isAduanaReview = widget.aduanaReview;
+
+    // Si tenemos trazabilidades, cargarlas
+    if (widget.trazabilidadesList != null &&
+        widget.trazabilidadesList!.isNotEmpty) {
+      _loadInitialEPCs();
+    }
+
+    // Si tenemos datos de la logística, inicializar los campos
+    if (widget.noLogistica != null) {
+      noLogisticaController.text = widget.noLogistica.toString();
+    }
+
+    if (widget.operador != null) {
+      operadorController.text = widget.operador.toString();
+    }
+
+    // Establecer la fecha actual
+    fechaController.text = DateTime.now().toIso8601String().split('T')[0];
   }
 
   @override
@@ -48,6 +105,7 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     operadorController.dispose();
     noLogisticaController.dispose();
     observacionesController.dispose();
+    documentacionController.dispose();
     _clearAllData();
     super.dispose();
   }
@@ -65,6 +123,70 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       case AppLifecycleState.hidden:
         _stopScanner();
         break;
+    }
+  }
+
+  Future<void> _loadInitialEPCs() async {
+    if (widget.trazabilidadesList == null || widget.trazabilidadesList!.isEmpty)
+      return;
+
+    setState(() => isLoading = true);
+
+    for (String trazabilidad in widget.trazabilidadesList!) {
+      try {
+        // Limpiar la trazabilidad quitando comillas y barras invertidas
+        final cleanTrazabilidad =
+            trazabilidad.replaceAll('"', '').replaceAll('\\', '');
+
+        // Formatear el EPC asegurando que tenga 16 dígitos
+        final formattedEPC = cleanTrazabilidad.padLeft(16, '0');
+
+        // Si ya tenemos este EPC, saltamos
+        if (epcs.any((e) =>
+            e['epc'] == formattedEPC || e['trazabilidad'] == cleanTrazabilidad))
+          continue;
+
+        try {
+          final response = await http
+              .get(Uri.parse("http://172.16.10.31/api/Socket/$formattedEPC"))
+              .timeout(Duration(seconds: 10));
+
+          if (response.statusCode == 200 && mounted) {
+            final data = Map<String, dynamic>.from(jsonDecode(response.body));
+            setState(() {
+              epcs.add({
+                'epc': formattedEPC,
+                'claveProducto': data['claveProducto'] ?? 'N/A',
+                'nombreProducto': data['nombreProducto'] ?? 'N/A',
+                'pesoNeto': data['pesoNeto']?.toString() ?? 'N/A',
+                'piezas': data['piezas']?.toString() ?? 'N/A',
+                'trazabilidad': data['trazabilidad'] ?? cleanTrazabilidad,
+              });
+            });
+          }
+        } catch (e) {
+          print('Error cargando información del EPC $formattedEPC: $e');
+          // Si falla la carga, añadimos la información básica
+          if (mounted) {
+            setState(() {
+              epcs.add({
+                'epc': formattedEPC,
+                'claveProducto': 'N/A',
+                'nombreProducto': 'N/A',
+                'pesoNeto': 'N/A',
+                'piezas': 'N/A',
+                'trazabilidad': cleanTrazabilidad,
+              });
+            });
+          }
+        }
+      } catch (e) {
+        print('Error procesando trazabilidad: $e');
+      }
+    }
+
+    if (mounted) {
+      setState(() => isLoading = false);
     }
   }
 
@@ -158,6 +280,46 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     }
   }
 
+  // Image handling methods
+  Future<File?> _optimizeAndSaveImage(File originalImage) async {
+    try {
+      final directory = await getTemporaryDirectory();
+      final targetPath =
+          '${directory.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      final decodedImage =
+          await decodeImageFromList(await originalImage.readAsBytes());
+      double width = decodedImage.width.toDouble();
+      double height = decodedImage.height.toDouble();
+
+      double maxDimension = 2048.0;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+      }
+
+      final result = await FlutterImageCompress.compressAndGetFile(
+        originalImage.path,
+        targetPath,
+        quality: 85,
+        format: CompressFormat.jpeg,
+        minWidth: width.round(),
+        minHeight: height.round(),
+        keepExif: true,
+      );
+
+      return result != null ? File(result.path) : null;
+    } catch (e) {
+      print("Error optimizing image: $e");
+      return null;
+    }
+  }
+
   Future<void> captureImage() async {
     try {
       final XFile? pickedFile = await _imagePicker.pickImage(
@@ -219,111 +381,149 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       return;
     }
 
+    if (fechaController.text.isEmpty ||
+        operadorController.text.isEmpty ||
+        noLogisticaController.text.isEmpty) {
+      _showSnackBar("Por favor complete todos los campos requeridos.");
+      return;
+    }
+
     setState(() => isUploading = true);
 
     try {
-      // 1. Subir datos del registro
-      final metadataRequest = http.MultipartRequest('POST',
-          Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create"));
+      // Verificar si es una revisión de aduana y realizar la validación adecuada
+      if (isAduanaReview) {
+        // Verificar que los campos específicos de aduana estén completos
+        bool allChecked = true;
+        aduanaChecklist.forEach((key, value) {
+          if (!value) allChecked = false;
+        });
 
-      // Convertir EPCs al formato esperado
-      List<String> epcsList = epcs.map((epc) => epc['epc'].toString()).toList();
+        if (!allChecked) {
+          _showSnackBar(
+              "Debe completar todos los puntos del checklist de aduana.");
+          setState(() => isUploading = false);
+          return;
+        }
 
-      metadataRequest.fields.addAll({
-        'Fecha': fechaController.text,
-        'NombreOperador': operadorController.text,
-        'NumeroLogistica': noLogisticaController.text,
-        'Observaciones': observacionesController.text ?? "",
-        'FechaCreacion': DateTime.now().toIso8601String(),
-        'Dispositivo': "ET40",
-        'ListaEPCs': jsonEncode(epcsList)
-      });
+        if (documentacionController.text.isEmpty) {
+          _showSnackBar("Por favor complete la información de documentación.");
+          setState(() => isUploading = false);
+          return;
+        }
 
-      final metadataResponse = await metadataRequest.send();
-      if (metadataResponse.statusCode != 200) {
-        throw HttpException(
-            'Error al crear registro: ${metadataResponse.statusCode}');
-      }
+        // Actualizar el estado de la revisión
+        if (widget.reviewId != null) {
+          try {
+            final updateResponse = await http.put(
+              Uri.parse(
+                  'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
+              body: json.encode("Aprobado en Revisión de Aduana"),
+              headers: {'Content-Type': 'application/json'},
+            );
 
-      // 2. Subir fotos en lotes
-      const int batchSize = 5;
-      final totalBatches = (images.length / batchSize).ceil();
+            if (updateResponse.statusCode != 200 &&
+                updateResponse.statusCode != 201) {
+              throw Exception(
+                  'Error al actualizar estado de revisión: ${updateResponse.statusCode}');
+            }
+          } catch (e) {
+            throw Exception('Error al actualizar estado: $e');
+          }
+        }
 
-      for (var i = 0; i < images.length; i += batchSize) {
-        final request = http.MultipartRequest(
-            'POST',
-            Uri.parse(
-                "http://172.16.10.31/api/RegistrosLogistica/AddPhotos/${noLogisticaController.text}"));
+        // Crear el registro de aduana
+        final aduanaRequest = http.MultipartRequest(
+            'POST', Uri.parse("http://172.16.10.31/api/AduanaReview/create"));
 
-        final end = math.min(i + batchSize, images.length);
-        for (var j = i; j < end; j++) {
-          final image = images[j];
-          final optimizedImage = await _optimizeAndSaveImage(image);
-          if (optimizedImage != null) {
-            final stream = http.ByteStream(optimizedImage.openRead());
-            final length = await optimizedImage.length();
+        aduanaRequest.fields.addAll({
+          'id_logistics_review': widget.reviewId.toString(),
+          'documentacion_correcta':
+              aduanaChecklist['documentacion_correcta'].toString(),
+          'sellos_completos': aduanaChecklist['sellos_completos'].toString(),
+          'embalaje_correcto': aduanaChecklist['embalaje_correcto'].toString(),
+          'etiquetado_aduana_correcto':
+              aduanaChecklist['etiquetado_aduana_correcto'].toString(),
+          'peso_bruto_correcto':
+              aduanaChecklist['peso_bruto_correcto'].toString(),
+          'documentacion': documentacionController.text,
+          'observaciones': observacionesController.text,
+          'fecha_revision': DateTime.now().toIso8601String(),
+          'revisado_por': operadorController.text,
+        });
+
+        // Añadir imágenes
+        for (var i = 0; i < images.length; i++) {
+          final image = images[i];
+          if (await image.exists()) {
+            final stream = http.ByteStream(image.openRead());
+            final length = await image.length();
+
+            final multipartFile = http.MultipartFile('fotos', stream, length,
+                filename:
+                    'aduana_${DateTime.now().millisecondsSinceEpoch}_$i.jpg');
+
+            aduanaRequest.files.add(multipartFile);
+          }
+        }
+
+        final aduanaResponse = await aduanaRequest.send();
+        final aduanaResult = await http.Response.fromStream(aduanaResponse);
+
+        if (aduanaResponse.statusCode != 200 &&
+            aduanaResponse.statusCode != 201) {
+          throw Exception(
+              'Error al crear revisión de aduana: ${aduanaResult.body}');
+        }
+
+        // Limpieza tras éxito
+        await _clearAllData();
+        if (mounted) {
+          _showSnackBar("Revisión de aduana completada exitosamente");
+          Navigator.pop(context, true); // Regresar a la pantalla anterior
+        }
+      } else {
+        // Flujo original para registro de logística
+        final request = http.MultipartRequest('POST',
+            Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create"));
+
+        request.fields.addAll({
+          'Fecha': fechaController.text,
+          'NombreOperador': operadorController.text,
+          'NumeroLogistica': noLogisticaController.text,
+          'Observaciones': observacionesController.text,
+          'FechaCreacion': DateTime.now().toIso8601String(),
+          'Dispositivo': "ET40",
+          'ListaEPCs': jsonEncode(epcs), // Send complete EPC objects
+        });
+
+        for (var image in images) {
+          if (await image.exists()) {
+            final stream = http.ByteStream(image.openRead());
+            final length = await image.length();
 
             final multipartFile = http.MultipartFile('Fotos', stream, length,
-                filename:
-                    '${noLogisticaController.text}_${(j + 1).toString().padLeft(2, '0')}.jpg');
+                filename: '${DateTime.now().millisecondsSinceEpoch}.jpg');
 
             request.files.add(multipartFile);
           }
         }
 
-        final batchResponse = await request.send();
-        if (batchResponse.statusCode != 200) {
+        final streamedResponse = await request.send();
+        final response = await http.Response.fromStream(streamedResponse);
+
+        if (response.statusCode == 200) {
+          await _clearAllData();
+          if (mounted) _showSnackBar("Datos subidos exitosamente");
+        } else {
           throw HttpException(
-              'Error al subir lote ${(i / batchSize + 1)} de $totalBatches');
+              'Error del servidor: ${response.statusCode}\n${response.body}');
         }
-
-        _showSnackBar("Subiendo fotos ${end} de ${images.length}");
       }
-
-      await _clearAllData();
-      if (mounted) _showSnackBar("Datos subidos exitosamente");
     } catch (e) {
       _showErrorDialog("Error de conexión", "Detalles: ${e.toString()}");
     } finally {
       if (mounted) setState(() => isUploading = false);
-    }
-  }
-
-  Future<File?> _optimizeAndSaveImage(File originalImage) async {
-    try {
-      final directory = await getTemporaryDirectory();
-      final targetPath =
-          '${directory.path}/${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-      final decodedImage =
-          await decodeImageFromList(await originalImage.readAsBytes());
-      double width = decodedImage.width.toDouble();
-      double height = decodedImage.height.toDouble();
-
-      const maxDimension = 1920.0;
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = (height * maxDimension) / width;
-          width = maxDimension;
-        } else {
-          width = (width * maxDimension) / height;
-          height = maxDimension;
-        }
-      }
-
-      final result = await FlutterImageCompress.compressAndGetFile(
-        originalImage.path,
-        targetPath,
-        quality: 85,
-        format: CompressFormat.jpeg,
-        minWidth: width.round(),
-        minHeight: height.round(),
-      );
-
-      return result != null ? File(result.path) : null;
-    } catch (e) {
-      print("Error optimizing image: $e");
-      return null;
     }
   }
 
@@ -344,6 +544,12 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           operadorController.clear();
           noLogisticaController.clear();
           observacionesController.clear();
+          documentacionController.clear();
+
+          // Restablecer checklist de aduana
+          aduanaChecklist.forEach((key, value) {
+            aduanaChecklist[key] = false;
+          });
         });
       }
     } catch (e) {
@@ -360,26 +566,26 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
         return;
       }
 
-      final excel = Excel.createExcel();
-      final Sheet sheet = excel['EPCs'];
+      final excel = xl.Excel.createExcel();
+      final xl.Sheet sheet = excel['EPCs'];
 
       sheet.appendRow([
-        TextCellValue('EPC'),
-        TextCellValue('Clave Producto'),
-        TextCellValue('Nombre Producto'),
-        TextCellValue('Peso Neto'),
-        TextCellValue('Piezas'),
-        TextCellValue('Trazabilidad')
+        xl.TextCellValue('EPC'),
+        xl.TextCellValue('Nombre Producto'),
+        xl.TextCellValue('Peso Neto'),
+        xl.TextCellValue('Clave Producto'),
+        xl.TextCellValue('Piezas'),
+        xl.TextCellValue('Trazabilidad')
       ]);
 
       for (var epc in epcs) {
         sheet.appendRow([
-          TextCellValue(epc['epc'].toString()),
-          TextCellValue(epc['claveProducto'].toString()),
-          TextCellValue(epc['nombreProducto'].toString()),
-          TextCellValue(epc['pesoNeto'].toString()),
-          TextCellValue(epc['piezas'].toString()),
-          TextCellValue(epc['trazabilidad'].toString())
+          xl.TextCellValue(epc['epc'].toString()),
+          xl.TextCellValue(epc['claveProducto'].toString()),
+          xl.TextCellValue(epc['nombreProducto'].toString()),
+          xl.TextCellValue(epc['pesoNeto'].toString()),
+          xl.TextCellValue(epc['piezas'].toString()),
+          xl.TextCellValue(epc['trazabilidad'].toString())
         ]);
       }
 
@@ -461,7 +667,9 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
               children: [
                 Center(
                   child: Text(
-                    "Confirmación de Datos",
+                    isAduanaReview
+                        ? "Confirmación de Revisión de Aduana"
+                        : "Confirmación de Datos",
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -508,12 +716,43 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                     labelText: "No. Logística *",
                     border: OutlineInputBorder(),
                   ),
+                  enabled:
+                      !isAduanaReview, // No permitir cambios si es revisión de aduana
                 ),
+                SizedBox(height: 8),
+
+                // Campos adicionales para la revisión de aduana
+                if (isAduanaReview) ...[
+                  _buildAduanaChecklistItem(
+                      'Documentación correcta', 'documentacion_correcta'),
+                  _buildAduanaChecklistItem(
+                      'Sellos completos', 'sellos_completos'),
+                  _buildAduanaChecklistItem(
+                      'Embalaje correcto', 'embalaje_correcto'),
+                  _buildAduanaChecklistItem('Etiquetado de aduana correcto',
+                      'etiquetado_aduana_correcto'),
+                  _buildAduanaChecklistItem(
+                      'Peso bruto correcto', 'peso_bruto_correcto'),
+                  SizedBox(height: 8),
+                  TextField(
+                    controller: documentacionController,
+                    decoration: InputDecoration(
+                      labelText: "Documentación *",
+                      border: OutlineInputBorder(),
+                      hintText:
+                          "Documentos presentados, números de referencia, etc.",
+                    ),
+                    maxLines: 3,
+                  ),
+                ],
+
                 SizedBox(height: 8),
                 TextField(
                   controller: observacionesController,
                   decoration: InputDecoration(
-                    labelText: "Observaciones",
+                    labelText: isAduanaReview
+                        ? "Observaciones Adicionales"
+                        : "Observaciones",
                     border: OutlineInputBorder(),
                   ),
                   maxLines: 3,
@@ -555,6 +794,23 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           ),
         );
       },
+    );
+  }
+
+  // Widget para cada elemento del checklist de aduana
+  Widget _buildAduanaChecklistItem(String label, String key) {
+    return CheckboxListTile(
+      title: Text(label),
+      value: aduanaChecklist[key],
+      onChanged: (bool? value) {
+        if (value != null) {
+          setState(() {
+            aduanaChecklist[key] = value;
+          });
+        }
+      },
+      controlAffinity: ListTileControlAffinity.leading,
+      contentPadding: EdgeInsets.symmetric(horizontal: 0, vertical: 4),
     );
   }
 
@@ -663,6 +919,7 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                   Text("Producto: ${epc['nombreProducto']}"),
                   Text("Peso: ${epc['pesoNeto']} kg"),
                   Text("Piezas: ${epc['piezas']}"),
+                  Text("Trazabilidad: ${epc['trazabilidad']}"),
                 ],
               ),
             ),
@@ -747,24 +1004,102 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildTopActionBar(),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    _buildEPCsList(),
-                    _buildImageGallery(),
-                  ],
+    return WillPopScope(
+      onWillPop: () async {
+        if (epcs.isNotEmpty || images.isNotEmpty) {
+          final shouldDiscard = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text('¿Descartar cambios?'),
+              content: Text(
+                  'Hay datos sin guardar. ¿Estás seguro de que quieres salir?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text('Salir'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                ),
+              ],
+            ),
+          );
+          return shouldDiscard ?? false;
+        }
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(isAduanaReview
+              ? 'Revisión de Aduana #${widget.noLogistica}'
+              : 'Escanear y Capturar'),
+          actions: [
+            if (isAduanaReview && widget.reviewStatus != null)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                margin: EdgeInsets.only(right: 10),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  widget.reviewStatus!,
+                  style: TextStyle(color: Colors.blue.shade800),
                 ),
               ),
-            ),
-            _buildBottomActionPanel(),
           ],
+        ),
+        resizeToAvoidBottomInset: true,
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildTopActionBar(),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      // Si es revisión de aduana, mostrar la información de cliente
+                      if (isAduanaReview && widget.cliente != null)
+                        Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Cliente: ${widget.cliente}',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                if (widget.operador != null)
+                                  Text(
+                                    'Operador: ${widget.operador}',
+                                    style: TextStyle(fontSize: 14),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      _buildEPCsList(),
+                      _buildImageGallery(),
+                    ],
+                  ),
+                ),
+              ),
+              _buildBottomActionPanel(),
+            ],
+          ),
         ),
       ),
     );
@@ -988,11 +1323,14 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                     )
                   : Icon(Icons.cloud_upload),
               label: Text(
-                isUploading ? "Subiendo..." : "Subir Datos",
+                isUploading
+                    ? "Subiendo..."
+                    : (isAduanaReview ? "Completar Revisión" : "Subir Datos"),
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF4CAF50),
+                backgroundColor:
+                    isAduanaReview ? Colors.blue : Color(0xFF4CAF50),
                 padding: EdgeInsets.symmetric(vertical: 12),
               ),
             ),
