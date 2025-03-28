@@ -12,13 +12,14 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:http_parser/http_parser.dart';
 
+// Pantalla de vista previa de imagen (sin cambios)
 // Pantalla de vista previa de imagen
 class FullScreenImageView extends StatefulWidget {
   final File imageFile;
   final String title;
 
   const FullScreenImageView({
-    Key? key,
+    Key? key, // Añadido el parámetro key para el constructor
     required this.imageFile,
     this.title = 'Vista previa',
   }) : super(key: key);
@@ -144,7 +145,7 @@ class _FullScreenImageViewState extends State<FullScreenImageView>
   }
 }
 
-// Modelo para Certificado de Calidad
+// Modelo para Certificado de Calidad (modificado)
 class QualityCertificate {
   String certificateNumber;
   String validator;
@@ -153,10 +154,10 @@ class QualityCertificate {
   List<String> relatedEPCs;
 
   QualityCertificate({
-    required this.certificateNumber,
-    required this.validator,
+    this.certificateNumber = "POR SUBIR",
+    this.validator = "Sistema",
     required this.validationDate,
-    this.observations = '',
+    this.observations = 'Certificado pendiente de subir',
     required this.relatedEPCs,
   });
 
@@ -167,6 +168,7 @@ class QualityCertificate {
         'observations': observations,
         'relatedEPCs': relatedEPCs,
       };
+  Map<String, bool> epcReviewedStatus = {};
 }
 
 class ReviewPoint {
@@ -207,7 +209,8 @@ class _LogisticsReviewDetailScreenState
   bool hasUnsavedChanges = false;
   final ScrollController _scrollController = ScrollController();
   bool _showBackToTop = false;
-
+// Agregar una nueva propiedad a la clase _LogisticsReviewDetailScreenState
+  Map<String, bool> epcReviewedStatus = {};
   // Colores personalizados mejorados
   final Color primaryColor = const Color(0xFF2C3E50);
   final Color accentColor = const Color(0xFF3498DB);
@@ -216,11 +219,6 @@ class _LogisticsReviewDetailScreenState
   final Color successColor = const Color(0xFF2ECC71);
   final Color warningColor = const Color(0xFFF1C40F);
   final Color errorColor = const Color(0xFFE74C3C);
-
-  // Controladores para el certificado
-  final TextEditingController certificateController = TextEditingController();
-  final TextEditingController validatorController = TextEditingController();
-  final TextEditingController observationsController = TextEditingController();
 
   // Categorías de revisión
   final Map<String, List<String>> reviewCategories = {
@@ -260,9 +258,6 @@ class _LogisticsReviewDetailScreenState
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_scrollListener);
     _scrollController.dispose();
-    certificateController.dispose();
-    validatorController.dispose();
-    observationsController.dispose();
     _cleanupTempFiles();
     super.dispose();
   }
@@ -280,146 +275,6 @@ class _LogisticsReviewDetailScreenState
       if (!_showBackToTop) setState(() => _showBackToTop = true);
     } else {
       if (_showBackToTop) setState(() => _showBackToTop = false);
-    }
-  }
-
-  // Método para guardar revisión de calidad
-  Future<void> _saveQualityReview({
-    required int epcId,
-    required int logisticsReviewId,
-    required Map<String, bool> reviewPoints,
-    required String comments,
-    required String validator,
-    required String certificateNumber,
-    required DateTime validationDate,
-    required String certificateObservations,
-    required List<File> photos,
-  }) async {
-    try {
-      // Crear FormData
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('http://172.16.10.31/api/create'),
-      );
-
-      // Agregar campos de IDs
-      request.fields['id_epc'] = epcId.toString();
-      request.fields['id_logistics_review'] = logisticsReviewId.toString();
-
-      // Agregar campos booleanos para puntos de revisión
-      request.fields['tarima_estado'] =
-          reviewPoints['Tarima en buen estado']?.toString() ?? 'false';
-      request.fields['empaque_sin_danos'] =
-          reviewPoints['Empaque sin daños']?.toString() ?? 'false';
-      request.fields['producto_limpio'] =
-          reviewPoints['Producto limpio']?.toString() ?? 'false';
-      request.fields['sin_deformaciones'] =
-          reviewPoints['Sin deformaciones']?.toString() ?? 'false';
-      request.fields['libre_de_plaga'] =
-          reviewPoints['Libre de plaga']?.toString() ?? 'false';
-      request.fields['flejado_correcto'] =
-          reviewPoints['Flejado correcto']?.toString() ?? 'false';
-
-      request.fields['etiquetas_completas'] =
-          reviewPoints['Etiquetas completas']?.toString() ?? 'false';
-      request.fields['codigo_legible'] =
-          reviewPoints['Códigos de barras legibles']?.toString() ?? 'false';
-      request.fields['informacion_visible'] =
-          reviewPoints['Información visible']?.toString() ?? 'false';
-      request.fields['fechas_correctas'] =
-          reviewPoints['Fechas correctas']?.toString() ?? 'false';
-      request.fields['lote_visible'] =
-          reviewPoints['Lote visible']?.toString() ?? 'false';
-
-      request.fields['peso_correcto'] =
-          reviewPoints['Peso correcto']?.toString() ?? 'false';
-      request.fields['cantidad_correcta'] =
-          reviewPoints['Cantidad de piezas correcta']?.toString() ?? 'false';
-      request.fields['orden_correcta'] =
-          reviewPoints['Orden de producción correcta']?.toString() ?? 'false';
-      request.fields['unidad_correcta'] =
-          reviewPoints['Unidad de medida correcta']?.toString() ?? 'false';
-
-      // Agregar comentarios y datos del certificado
-      request.fields['comentarios'] = comments;
-      request.fields['validador'] = validator;
-      request.fields['certificado_calidad'] = certificateNumber;
-      request.fields['fecha_validacion'] = validationDate.toIso8601String();
-      request.fields['observaciones_certificado'] = certificateObservations;
-
-      // Agregar fotos
-      for (var i = 0; i < photos.length; i++) {
-        final file = photos[i];
-        final fileStream = http.ByteStream(file.openRead());
-        final fileLength = await file.length();
-
-        final multipartFile = http.MultipartFile(
-          'fotos', // El nombre del campo debe coincidir con lo que espera el controlador
-          fileStream,
-          fileLength,
-          filename: '${logisticsReviewId}_photo_$i.jpg',
-          contentType: MediaType('image', 'jpeg'),
-        );
-
-        request.files.add(multipartFile);
-      }
-
-      // Enviar la solicitud
-      final response = await request.send();
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        print('Revisión de calidad guardada exitosamente');
-        // Procesar respuesta si es necesario
-        final responseData = await response.stream.bytesToString();
-        final jsonResponse = json.decode(responseData);
-        print(jsonResponse);
-      } else {
-        throw Exception('Error al guardar la revisión: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Error enviando revisión: $e');
-      rethrow;
-    }
-  }
-
-// Método para actualizar el estado de la revisión
-  Future<void> _updateReviewStatus({
-    required int reviewId,
-    required String newStatus,
-  }) async {
-    try {
-      // Validar que el estado sea uno de los permitidos
-      final validStatuses = [
-        "Rechazado en Revisión de Calidad",
-        "Aprobado con Observaciones en Calidad",
-        "Aprobado en Revisión de Calidad",
-      ];
-
-      if (!validStatuses.contains(newStatus)) {
-        throw Exception('Estado inválido');
-      }
-
-      final response = await http.put(
-        Uri.parse(
-            'http://172.16.10.31/api/logistics_to_review/$reviewId/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          "status": newStatus
-        }), // Notar que enviamos directamente el string, no un objeto JSON
-      );
-
-      if (response.statusCode == 200) {
-        print('Estado actualizado correctamente');
-        // Procesar respuesta si es necesario
-        final jsonResponse = json.decode(response.body);
-        print(jsonResponse);
-      } else {
-        throw Exception(
-            'Error al actualizar el estado: ${response.statusCode}');
-      }
-    } catch (e) {
-      print('Error actualizando estado: $e');
-      rethrow;
     }
   }
 
@@ -824,11 +679,16 @@ class _LogisticsReviewDetailScreenState
   }
 
   // Método para construir la tarjeta de EPC
+  // Método para construir la tarjeta de EPC
   Widget _buildEPCCard(Map<String, dynamic> epc) {
     final trazabilidad = epc['trazabilidad'].toString();
-    bool isAllReviewed = reviewStates[trazabilidad]
-            ?.values
-            .every((point) => point.isApproved || point.comment != null) ??
+
+    // Verificar si esta tarima está marcada como revisada
+    bool isMarkedAsReviewed = epcReviewedStatus[trazabilidad] ?? false;
+
+    // Verificar si todos los puntos han sido revisados (aprobados o con comentarios)
+    bool allPointsReviewed = reviewStates[trazabilidad]?.values.every((point) =>
+            point.isApproved || (!point.isApproved && point.comment != null)) ??
         false;
 
     return Container(
@@ -845,69 +705,188 @@ class _LogisticsReviewDetailScreenState
           ),
         ],
       ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          leading: Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: isAllReviewed
-                  ? successColor.withOpacity(0.1)
-                  : warningColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              isAllReviewed ? Icons.check_circle : Icons.pending,
-              color: isAllReviewed ? successColor : warningColor,
-            ),
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Trazabilidad: ${epc['trazabilidad']}',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+      child: Stack(
+        children: [
+          // Indicador de tarima revisada (badge)
+          if (isMarkedAsReviewed)
+            Positioned(
+              top: 0,
+              right: 20,
+              child: Container(
+                height: 30,
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: successColor,
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(8),
+                    bottomRight: Radius.circular(8),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: successColor.withOpacity(0.3),
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.verified,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      'Revisada',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              Text(
-                epc['nombreProducto'],
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
+            ),
+
+          // Contenido de la tarjeta de EPC
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              leading: Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isMarkedAsReviewed
+                      ? successColor.withOpacity(0.1)
+                      : warningColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isMarkedAsReviewed ? Icons.check_circle : Icons.pending,
+                  color: isMarkedAsReviewed ? successColor : warningColor,
                 ),
               ),
-            ],
-          ),
-          children: [
-            Padding(
-              padding: EdgeInsets.all(16),
-              child: Column(
+              title: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildProductInfoCard(epc),
-                  SizedBox(height: 24),
                   Text(
-                    'Puntos de Revisión',
+                    'Trazabilidad: ${epc['trazabilidad']}',
                     style: TextStyle(
-                      fontSize: 18,
                       fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
-                  SizedBox(height: 16),
-                  ...reviewCategories.entries.map(
-                    (category) => _buildReviewCategory(
-                      category.key,
-                      category.value,
-                      trazabilidad,
+                  Text(
+                    epc['nombreProducto'],
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
                     ),
                   ),
                 ],
               ),
+              children: [
+                Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildProductInfoCard(epc),
+                      SizedBox(height: 24),
+                      Text(
+                        'Puntos de Revisión',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 16),
+                      ...reviewCategories.entries.map(
+                        (category) => _buildReviewCategory(
+                          category.key,
+                          category.value,
+                          trazabilidad,
+                        ),
+                      ),
+
+                      // Botón para marcar la tarima como revisada
+                      SizedBox(height: 24),
+                      Container(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: Icon(
+                            isMarkedAsReviewed
+                                ? Icons.verified_user
+                                : Icons.check_circle_outline,
+                            color: Colors.white,
+                          ),
+                          label: Text(
+                            isMarkedAsReviewed
+                                ? 'TARIMA REVISADA'
+                                : 'MARCAR COMO REVISADA',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isMarkedAsReviewed
+                                ? successColor
+                                : (allPointsReviewed
+                                    ? Colors.blue
+                                    : Colors.grey),
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: allPointsReviewed
+                              ? () {
+                                  setState(() {
+                                    // Alternar el estado de revisado
+                                    epcReviewedStatus[trazabilidad] =
+                                        !isMarkedAsReviewed;
+                                    hasUnsavedChanges = true;
+                                  });
+
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(isMarkedAsReviewed
+                                          ? 'Tarima marcada como no revisada'
+                                          : 'Tarima marcada como revisada'),
+                                      backgroundColor: isMarkedAsReviewed
+                                          ? Colors.orange
+                                          : successColor,
+                                      behavior: SnackBarBehavior.floating,
+                                    ),
+                                  );
+                                }
+                              : null, // Deshabilitar si no todos los puntos están revisados
+                        ),
+                      ),
+
+                      // Mensaje si el botón está deshabilitado
+                      if (!allPointsReviewed)
+                        Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Para marcar como revisada, complete todos los puntos de revisión',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1078,16 +1057,69 @@ class _LogisticsReviewDetailScreenState
         children: [
           _buildProductInfoRow('Clave de Producto', epc['claveProducto']),
           Divider(height: 20),
-          _buildProductInfoRow(
-              'Peso Neto', '${epc['pesoNeto']} ${epc['claveUnidad']}'),
+          _buildProductInfoRow('Peso Neto', '${epc['pesoNeto']}KGM'),
           Divider(height: 20),
           _buildProductInfoRow('Piezas', epc['piezas'].toString()),
           Divider(height: 20),
           _buildProductInfoRow('Orden', epc['orden']),
+          Divider(height: 20),
+          _buildProductInfoRow('Clave Producto Cliente', epc['itemNumber']),
+          Divider(height: 20),
+          _buildProductInfoRow('Orden Cliente', epc['inventoryLot']),
+          Divider(height: 20),
+          _buildProductInfoRow('Cajas por Tarima', epc['shippingUnits']),
+          Divider(height: 20),
+          _buildProductInfoRow('Piezas por Caja', epc['individualUnits']),
           SizedBox(height: 16),
-          _buildCertificateStatus(
-            epc['claveProducto'].toString(),
-            [epc as Map<String, dynamic>],
+
+          // Mostrar mensaje fijo para el certificado
+          Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.grey[300]!,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.info_outline,
+                    color: Colors.grey[400],
+                    size: 20,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Certificado de Calidad: POR SUBIR',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      Text(
+                        'El certificado se cargará posteriormente',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1116,79 +1148,6 @@ class _LogisticsReviewDetailScreenState
           ),
         ),
       ],
-    );
-  }
-
-  // Método para mostrar el estado del certificado
-  Widget _buildCertificateStatus(
-      String claveProducto, List<Map<String, dynamic>> epcs) {
-    final hasCertificate = certificates.containsKey(claveProducto);
-
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color:
-            hasCertificate ? successColor.withOpacity(0.1) : Colors.grey[100],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: hasCertificate
-              ? successColor.withOpacity(0.3)
-              : Colors.grey[300]!,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              hasCertificate ? Icons.verified_user : Icons.pending,
-              color: hasCertificate ? successColor : Colors.grey[400],
-              size: 20,
-            ),
-          ),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  hasCertificate
-                      ? 'Certificado No. ${certificates[claveProducto]!.certificateNumber}'
-                      : 'Certificado Pendiente',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[800],
-                  ),
-                ),
-                if (hasCertificate)
-                  Text(
-                    'Validado por: ${certificates[claveProducto]!.validator}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          TextButton.icon(
-            icon: Icon(
-              hasCertificate ? Icons.edit : Icons.add,
-              size: 18,
-            ),
-            label: Text(hasCertificate ? 'Editar' : 'Agregar'),
-            onPressed: () => _showCertificateModal(claveProducto, epcs),
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              backgroundColor: Colors.white,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1428,350 +1387,6 @@ class _LogisticsReviewDetailScreenState
     );
   }
 
-  // Modal de Certificado de Calidad mejorado
-  void _showCertificateModal(
-      String productKey, List<Map<String, dynamic>> epcs) async {
-    final certificate = certificates[productKey] ??
-        QualityCertificate(
-          certificateNumber: '',
-          validator: '',
-          validationDate: DateTime.now(),
-          relatedEPCs: epcs.map((e) => e['trazabilidad'].toString()).toList(),
-        );
-
-    certificateController.text = certificate.certificateNumber;
-    validatorController.text = certificate.validator;
-    observationsController.text = certificate.observations;
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return Dialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Container(
-            constraints: BoxConstraints(maxWidth: 600),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Encabezado del Modal
-                  Container(
-                    padding: EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: primaryColor,
-                      borderRadius:
-                          BorderRadius.vertical(top: Radius.circular(16)),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.verified_user,
-                            color: Colors.white, size: 24),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Certificado de Calidad',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Producto: $productKey',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.9),
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Número de Certificado
-                        _buildCertificateField(
-                          controller: certificateController,
-                          label: 'Número de Certificado',
-                          icon: Icons.numbers,
-                          required: true,
-                        ),
-                        SizedBox(height: 16),
-
-                        // Validador
-                        _buildCertificateField(
-                          controller: validatorController,
-                          label: 'Validador',
-                          icon: Icons.person,
-                          required: true,
-                        ),
-                        SizedBox(height: 16),
-
-                        // Fecha de Validación
-                        Container(
-                          padding: EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[50],
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.grey[300]!),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Fecha de Validación',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Icon(Icons.calendar_today,
-                                      color: primaryColor, size: 20),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    DateFormat('dd/MM/yyyy HH:mm')
-                                        .format(DateTime.now()),
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 16),
-
-                        // Observaciones
-                        TextField(
-                          controller: observationsController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            labelText: 'Observaciones',
-                            alignLabelWithHint: true,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[50],
-                            prefixIcon: Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 12),
-                              child: Icon(Icons.note, color: primaryColor),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 24),
-
-                        // Lista de EPCs
-                        Text(
-                          'EPCs Asociados',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Container(
-                          constraints: BoxConstraints(maxHeight: 200),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey[300]!),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: ListView.builder(
-                            shrinkWrap: true,
-                            itemCount: epcs.length,
-                            itemBuilder: (context, index) {
-                              final epc = epcs[index];
-                              return Container(
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: index < epcs.length - 1
-                                          ? Colors.grey[200]!
-                                          : Colors.transparent,
-                                    ),
-                                  ),
-                                ),
-                                child: ListTile(
-                                  dense: true,
-                                  leading: Container(
-                                    padding: EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: accentColor.withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Icon(
-                                      Icons.tag,
-                                      size: 16,
-                                      color: accentColor,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    epc['trazabilidad'].toString(),
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.w500),
-                                  ),
-                                  subtitle: Text(
-                                    'Peso: ${epc['pesoNeto']} ${epc['claveUnidad']}',
-                                    style: TextStyle(fontSize: 12),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Divider(height: 1),
-                  Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: Text('Cancelar'),
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 24,
-                              vertical: 12,
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 16),
-                        ElevatedButton.icon(
-                          icon: Icon(Icons.save),
-                          label: Text('Guardar Certificado'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryColor,
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 24,
-                              vertical: 12,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          onPressed: () {
-                            if (certificateController.text.isEmpty ||
-                                validatorController.text.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Por favor complete los campos requeridos',
-                                  ),
-                                  backgroundColor: errorColor,
-                                ),
-                              );
-                              return;
-                            }
-
-                            certificates[productKey] = QualityCertificate(
-                              certificateNumber: certificateController.text,
-                              validator: validatorController.text,
-                              validationDate: DateTime.now(),
-                              observations: observationsController.text,
-                              relatedEPCs: epcs
-                                  .map((e) => e['trazabilidad'].toString())
-                                  .toList(),
-                            );
-
-                            setState(() {
-                              hasUnsavedChanges = true;
-                            });
-                            Navigator.pop(context);
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Widget auxiliar para campos del certificado
-  Widget _buildCertificateField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    bool required = false,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (required)
-          Row(
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey[700],
-                ),
-              ),
-              SizedBox(width: 4),
-              Text(
-                '*',
-                style: TextStyle(
-                  color: errorColor,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        if (!required)
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[700],
-            ),
-          ),
-        SizedBox(height: 8),
-        TextField(
-          controller: controller,
-          decoration: InputDecoration(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            filled: true,
-            fillColor: Colors.grey[50],
-            prefixIcon: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(icon, color: primaryColor),
-            ),
-            hintText: 'Ingrese $label',
-          ),
-        ),
-      ],
-    );
-  }
-
   // Método para guardar una foto localmente
   Future<String?> _savePhotoLocally({
     required int reviewId,
@@ -1834,7 +1449,6 @@ class _LogisticsReviewDetailScreenState
                   'trazabilidad': photo['trazabilidad'],
                   'point': photo['point'],
                   'timestamp': photo['timestamp'],
-                  // No incluimos los datos binarios de la foto aquí, solo la referencia
                   'photoPath':
                       'photo_${photo['trazabilidad'].replaceAll(RegExp(r'[^\w]'), '_')}_${photo['point'].replaceAll(RegExp(r'[^\w]'), '_')}_${DateTime.parse(photo['timestamp']).millisecondsSinceEpoch}.jpg',
                 })
@@ -1987,42 +1601,9 @@ class _LogisticsReviewDetailScreenState
     if (temporaryPhotoData.isNotEmpty) {
       await _savePhotoMetadata(widget.reviewId, temporaryPhotoData);
     }
-
-    // NOTA: Cuando implementes el endpoint, puedes descomentar este código
-    // y adaptarlo según tus necesidades
-
-    /*
-    // Implementación futura para cuando el endpoint esté disponible
-    for (var photoInfo in temporaryPhotoData) {
-      try {
-        final photoResponse = await http.post(
-          Uri.parse(
-            'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/photos',
-          ),
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: json.encode({
-            'trazabilidad': photoInfo['trazabilidad'],
-            'point': photoInfo['point'],
-            'photo': base64Encode(photoInfo['photoData']),
-            'timestamp': photoInfo['timestamp'],
-          }),
-        );
-        
-        if (photoResponse.statusCode != 200 && photoResponse.statusCode != 201) {
-          throw Exception('Error del servidor: ${photoResponse.statusCode}');
-        }
-      } catch (e) {
-        print('Error al subir foto: $e');
-        throw Exception('Error al subir foto: $e');
-      }
-    }
-    */
   }
 
   // Función de guardado modificada
-  // Implementación mejorada del método _saveReview
   Future<void> _saveReview() async {
     try {
       print('==== INICIANDO PROCESO DE GUARDAR REVISIÓN ====');
@@ -2044,51 +1625,6 @@ class _LogisticsReviewDetailScreenState
         if (hasRejections) break;
       }
       print('¿Tiene rechazos? $hasRejections');
-
-      // Verificar certificados faltantes
-      print('Verificando certificados...');
-      final Map<String, List<Map<String, dynamic>>> productGroups = {};
-      final detalleEPCs = detailData!['detalleEPCs'] as List;
-
-      // Agrupar EPCs por producto
-      for (var epc in detalleEPCs) {
-        final claveProducto = epc['claveProducto'].toString();
-        productGroups[claveProducto] = productGroups[claveProducto] ?? [];
-        productGroups[claveProducto]!.add(epc);
-      }
-      print('EPCs agrupados por producto: ${productGroups.keys.join(', ')}');
-
-      // Verificar certificados faltantes
-      final List<String> missingCertificates = [];
-      for (var claveProducto in productGroups.keys) {
-        if (!certificates.containsKey(claveProducto)) {
-          print('Certificado faltante para: $claveProducto');
-          missingCertificates.add(claveProducto);
-        }
-      }
-
-      if (missingCertificates.isNotEmpty) {
-        print(
-            'ERROR: Certificados pendientes: ${missingCertificates.join(', ')}');
-        _showErrorDialog(
-          context: context,
-          title: 'Certificados Pendientes',
-          message:
-              'Faltan certificados de calidad para los siguientes productos:\n\n' +
-                  missingCertificates.map((clave) => '• $clave').join('\n'),
-          primaryActionText: 'Agregar Certificado',
-          primaryAction: () {
-            Navigator.pop(context);
-            _showCertificateModal(
-              missingCertificates.first,
-              productGroups[missingCertificates.first]!,
-            );
-          },
-        );
-        setState(() => isLoading = false);
-        return;
-      }
-      print('Verificación de certificados completada con éxito');
 
       // Verificar puntos no aprobados sin comentario
       print('Verificando comentarios para puntos no aprobados...');
@@ -2127,6 +1663,30 @@ class _LogisticsReviewDetailScreenState
         return;
       }
       print('Verificación de comentarios completada con éxito');
+
+      // Crear un certificado por defecto para cada producto
+      final detalleEPCs = detailData!['detalleEPCs'] as List;
+      Map<String, List<String>> productEPCs = {};
+
+      for (var epc in detalleEPCs) {
+        final claveProducto = epc['claveProducto'].toString();
+        final trazabilidad = epc['trazabilidad'].toString();
+
+        if (!productEPCs.containsKey(claveProducto)) {
+          productEPCs[claveProducto] = [];
+        }
+        productEPCs[claveProducto]!.add(trazabilidad);
+      }
+
+      // Crear certificados por defecto para todos los productos
+      for (var entry in productEPCs.entries) {
+        if (!certificates.containsKey(entry.key)) {
+          certificates[entry.key] = QualityCertificate(
+            validationDate: DateTime.now(),
+            relatedEPCs: entry.value,
+          );
+        }
+      }
 
       // Obtener todos los valores necesarios de tu diálogo de confirmación
       print('Mostrando diálogo de confirmación...');
@@ -2312,9 +1872,6 @@ class _LogisticsReviewDetailScreenState
 
           // Obtener el certificado para este producto
           final claveProducto = epc['claveProducto'].toString();
-          final certificate = certificates[claveProducto]!;
-          print(
-              'Certificado encontrado para $claveProducto: ${certificate.certificateNumber}');
 
           // IMPORTANTE: Asegurar que el validador nunca sea nulo o vacío
           String validatorValue = validator.trim();
@@ -2325,43 +1882,22 @@ class _LogisticsReviewDetailScreenState
           }
 
           // Formatear fecha de validación correctamente
-          String fechaValidacion;
-          try {
-            // Asegurar que tengamos una fecha válida
-            DateTime dateTime = certificate.validationDate;
-            // Formato ISO 8601 simple sin milisegundos
-            fechaValidacion = "${dateTime.year}-"
-                "${dateTime.month.toString().padLeft(2, '0')}-"
-                "${dateTime.day.toString().padLeft(2, '0')}T"
-                "${dateTime.hour.toString().padLeft(2, '0')}:"
-                "${dateTime.minute.toString().padLeft(2, '0')}:"
-                "${dateTime.second.toString().padLeft(2, '0')}";
-          } catch (e) {
-            // Si hay problemas con la fecha, usar la fecha actual
-            final now = DateTime.now();
-            fechaValidacion = "${now.year}-"
-                "${now.month.toString().padLeft(2, '0')}-"
-                "${now.day.toString().padLeft(2, '0')}T"
-                "${now.hour.toString().padLeft(2, '0')}:"
-                "${now.minute.toString().padLeft(2, '0')}:"
-                "${now.second.toString().padLeft(2, '0')}";
-            print(
-                'ERROR con fecha de validación, usando fecha actual: $fechaValidacion');
-          }
+          DateTime validationDate = DateTime.now();
+          String fechaValidacion = "${validationDate.year}-"
+              "${validationDate.month.toString().padLeft(2, '0')}-"
+              "${validationDate.day.toString().padLeft(2, '0')}T"
+              "${validationDate.hour.toString().padLeft(2, '0')}:"
+              "${validationDate.minute.toString().padLeft(2, '0')}:"
+              "${validationDate.second.toString().padLeft(2, '0')}";
 
-          // Asegurar que observaciones_certificado nunca sea nulo
-          String observacionesValue = certificate.observations.trim();
-          if (observacionesValue.isEmpty) {
-            observacionesValue = "Sin observaciones";
-          }
-
-          // Agregar comentarios y certificado
+          // Agregar comentarios y certificado (con valor fijo "POR SUBIR")
           print('Agregando datos de comentarios y certificado...');
           request.fields['comentarios'] = commentText;
-          request.fields['validador'] = validatorValue; // Campo obligatorio
-          request.fields['certificado_calidad'] = certificate.certificateNumber;
+          request.fields['validador'] = validatorValue;
+          request.fields['certificado_calidad'] = "POR SUBIR";
           request.fields['fecha_validacion'] = fechaValidacion;
-          request.fields['observaciones_certificado'] = observacionesValue;
+          request.fields['observaciones_certificado'] =
+              "Certificado pendiente de subir";
 
           // Recopilar fotos para este EPC
           print('Procesando fotos...');
@@ -2532,9 +2068,6 @@ class _LogisticsReviewDetailScreenState
 
     // Controlador para la persona que valida
     final validatorController = TextEditingController();
-    validatorController.text = validatorController.text.isEmpty
-        ? (certificates.isNotEmpty ? certificates.values.first.validator : '')
-        : validatorController.text;
 
     // Estados posibles para la revisión
     final List<String> estadosRevisiones = [
@@ -2768,8 +2301,6 @@ class _LogisticsReviewDetailScreenState
                                       productSummary.entries.elementAt(index);
                                   final producto = entry.key;
                                   final info = entry.value;
-                                  final hasCertificate =
-                                      certificates.containsKey(producto);
 
                                   return Card(
                                     margin: EdgeInsets.only(bottom: 16),
@@ -2818,11 +2349,7 @@ class _LogisticsReviewDetailScreenState
                                                   vertical: 6,
                                                 ),
                                                 decoration: BoxDecoration(
-                                                  color: hasCertificate
-                                                      ? successColor
-                                                          .withOpacity(0.1)
-                                                      : errorColor
-                                                          .withOpacity(0.1),
+                                                  color: Colors.grey[200],
                                                   borderRadius:
                                                       BorderRadius.circular(30),
                                                 ),
@@ -2831,23 +2358,15 @@ class _LogisticsReviewDetailScreenState
                                                       MainAxisSize.min,
                                                   children: [
                                                     Icon(
-                                                      hasCertificate
-                                                          ? Icons.verified
-                                                          : Icons.warning,
+                                                      Icons.info_outline,
                                                       size: 16,
-                                                      color: hasCertificate
-                                                          ? successColor
-                                                          : errorColor,
+                                                      color: Colors.grey[700],
                                                     ),
                                                     SizedBox(width: 6),
                                                     Text(
-                                                      hasCertificate
-                                                          ? 'Certificado'
-                                                          : 'Sin Certificado',
+                                                      'Certificado: POR SUBIR',
                                                       style: TextStyle(
-                                                        color: hasCertificate
-                                                            ? successColor
-                                                            : errorColor,
+                                                        color: Colors.grey[700],
                                                         fontWeight:
                                                             FontWeight.w500,
                                                         fontSize: 12,
@@ -2907,29 +2426,6 @@ class _LogisticsReviewDetailScreenState
                                               ),
                                             ],
                                           ),
-
-                                          // Si tiene certificado, mostrar información
-                                          if (hasCertificate) ...[
-                                            SizedBox(height: 12),
-                                            Divider(),
-                                            SizedBox(height: 8),
-                                            Text(
-                                              'Certificado No. ${certificates[producto]!.certificateNumber}',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                            if (certificates[producto]!
-                                                .observations
-                                                .isNotEmpty)
-                                              Text(
-                                                'Observaciones: ${certificates[producto]!.observations}',
-                                                style: TextStyle(
-                                                  color: Colors.grey[700],
-                                                  fontSize: 13,
-                                                ),
-                                              ),
-                                          ],
                                         ],
                                       ),
                                     ),
@@ -3049,7 +2545,7 @@ class _LogisticsReviewDetailScreenState
     );
   }
 
-// Widget auxiliar para construir filas de información
+  // Widget auxiliar para construir filas de información
   Widget _buildInfoRow({
     required IconData icon,
     required String label,
@@ -3093,7 +2589,7 @@ class _LogisticsReviewDetailScreenState
     );
   }
 
-// Widget auxiliar para construir chips de información
+  // Widget auxiliar para construir chips de información
   Widget _buildInfoChip({
     required String label,
     required String value,
@@ -3294,6 +2790,7 @@ class _LogisticsReviewDetailScreenState
     for (var epc in detalleEPCs) {
       final trazabilidad = epc['trazabilidad'].toString();
       reviewStates[trazabilidad] = {};
+      epcReviewedStatus[trazabilidad] = false; // Inicializar como no revisada
 
       for (var category in reviewCategories.entries) {
         for (var point in category.value) {
@@ -3359,6 +2856,9 @@ class _LogisticsReviewDetailScreenState
   // Main Build Method
   @override
   Widget build(BuildContext context) {
+    // Obtener el padding del sistema para evitar la superposición con la barra de navegación
+    final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
@@ -3377,11 +2877,16 @@ class _LogisticsReviewDetailScreenState
           ],
         ),
         body: SafeArea(
-          child: isLoading
-              ? Center(child: CircularProgressIndicator())
-              : errorMessage != null
-                  ? _buildErrorView()
-                  : _buildMainContent(),
+          // Con bottom: false para manejar manualmente el padding inferior
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: bottomPadding),
+            child: isLoading
+                ? Center(child: CircularProgressIndicator())
+                : errorMessage != null
+                    ? _buildErrorView()
+                    : _buildMainContent(),
+          ),
         ),
         floatingActionButton: _showBackToTop
             ? FloatingActionButton(

@@ -5,11 +5,14 @@ import 'dart:convert';
 class MaterialSeparationWidget extends StatefulWidget {
   final GlobalKey<MaterialSeparationWidgetState> materialKey;
   final Map<String, dynamic> registro;
+  // Agregar número de logística como parámetro
+  final dynamic noLogistica;
 
   const MaterialSeparationWidget({
     super.key,
     required this.registro,
     required this.materialKey,
+    required this.noLogistica, // Nuevo parámetro obligatorio
   });
 
   @override
@@ -24,8 +27,9 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
       _globalTarimasEscaneadas = {};
   static final Map<String, double> _globalCantidadesSeparadas = {};
 
-  // Nuevo mapa para mantener todos los EPCs
-  static final Map<String, Set<String>> _allEpcsMap = {};
+  // Mantener un mapa de EPCs por logística
+  static final Map<String, Map<String, Set<String>>>
+      _epcsEscaneadosPorLogistica = {};
 
   // Variables de estado locales
   late Set<String> epcsEscaneados;
@@ -37,31 +41,146 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
   String? errorMessage;
   final TextEditingController _epcController = TextEditingController();
 
-  // Getter para la clave única del producto
-  String get _productKey =>
-      '${widget.registro['itemCode']}_${widget.registro['pedido']}';
-
-  // Método estático para obtener todos los EPCs
-  static List<String> getAllEpcs() {
-    return _allEpcsMap.values.expand((epcs) => epcs).toList();
+  // Getter para la clave única del producto que incluye la logística
+  String get _productKey {
+    return '${widget.noLogistica}_${widget.registro['itemCode']}_${widget.registro['pedido']}';
   }
 
+  // Getter para la clave de logística
+  String get _logisticaKey {
+    return widget.noLogistica.toString();
+  }
+
+  // Método estático para obtener todos los EPCs de una logística específica
+  static List<String> getEpcsByLogistica(String logisticaId) {
+    Set<String> result = {};
+
+    // Verificar si hay datos para esa logística
+    if (_epcsEscaneadosPorLogistica.containsKey(logisticaId)) {
+      // Recorrer todos los productos de esa logística y acumular sus EPCs
+      _epcsEscaneadosPorLogistica[logisticaId]!.values.forEach((epcs) {
+        result.addAll(epcs);
+      });
+    }
+
+    return result.toList();
+  }
+
+  // Método estático para obtener TODOS los EPCs (para depuración)
+  static List<String> getAllEpcs() {
+    Set<String> result = {};
+
+    // Recorrer todas las logísticas
+    _epcsEscaneadosPorLogistica.values.forEach((logisticaMap) {
+      // Para cada logística, recorrer todos sus productos
+      logisticaMap.values.forEach((epcs) {
+        result.addAll(epcs);
+      });
+    });
+
+    return result.toList();
+  }
+
+  // Mantiene compatibilidad con el código original que llamaba a getAllEpcs sin parámetros
+  // pero devuelve solo los EPCs de la logística especificada
+  static List<String> getEpcsByLogisticaId(String logisticaId) {
+    return getEpcsByLogistica(logisticaId);
+  }
+
+  // Método estático mejorado para limpiar todos los datos globales
   static void resetAllData() {
+    print("🧹 Iniciando resetAllData() global");
+    print(
+        "📊 Estado antes del reset: ${_epcsEscaneadosPorLogistica.length} logísticas en caché");
+
+    int totalEpcsAntes = 0;
+    _epcsEscaneadosPorLogistica.forEach((logistica, productos) {
+      productos.forEach((producto, epcs) {
+        totalEpcsAntes += epcs.length;
+      });
+    });
+    print("📊 Total de EPCs antes del reset: $totalEpcsAntes");
+
     _globalEpcsEscaneados.clear();
     _globalTarimasEscaneadas.clear();
     _globalCantidadesSeparadas.clear();
-    _allEpcsMap.clear();
+    _epcsEscaneadosPorLogistica.clear();
+
+    print(
+        "✅ resetAllData() completado, todos los datos globales han sido limpiados");
+    print(
+        "📊 Estado después del reset: ${_epcsEscaneadosPorLogistica.length} logísticas, ${getAllEpcs().length} EPCs totales");
   }
 
-  // Agregar este método de instancia para resetear el estado local
+  // Método para limpiar datos de una logística específica
+  static void resetLogisticaData(String logisticaId) {
+    print("🧹 Iniciando resetLogisticaData() para logística $logisticaId");
+
+    if (_epcsEscaneadosPorLogistica.containsKey(logisticaId)) {
+      int epcsCount = 0;
+      _epcsEscaneadosPorLogistica[logisticaId]!.forEach((producto, epcs) {
+        epcsCount += epcs.length;
+      });
+
+      print("📊 EPCs antes del reset para logística $logisticaId: $epcsCount");
+
+      // Eliminar todos los registros para esta logística
+      _epcsEscaneadosPorLogistica.remove(logisticaId);
+
+      // También limpiar los datos antiguos que correspondan a esta logística
+      List<String> keysToRemove = [];
+      _globalEpcsEscaneados.keys.forEach((key) {
+        if (key.startsWith("${logisticaId}_")) {
+          keysToRemove.add(key);
+        }
+      });
+
+      for (String key in keysToRemove) {
+        _globalEpcsEscaneados.remove(key);
+        _globalTarimasEscaneadas.remove(key);
+        _globalCantidadesSeparadas.remove(key);
+      }
+
+      print("✅ resetLogisticaData() completado para logística $logisticaId");
+      print(
+          "📊 EPCs después del reset: ${getEpcsByLogistica(logisticaId).length}");
+    } else {
+      print("⚠️ No se encontraron datos para la logística $logisticaId");
+    }
+  }
+
+  // Método de instancia para resetear el estado local de un widget
   void resetLocalData() {
-    setState(() {
-      epcsEscaneados.clear();
-      tarimasEscaneadas.clear();
-      cantidadSeparada = 0;
-      cantidadPendiente = cantidadProgramada;
-      _epcController.clear();
-    });
+    if (mounted) {
+      final productKey = _productKey;
+      final logisticaKey = _logisticaKey;
+
+      print(
+          "🔄 Iniciando resetLocalData() para producto $productKey en logística $logisticaKey");
+      print(
+          "📊 Estado antes del reset: ${epcsEscaneados.length} EPCs, $cantidadSeparada separados");
+
+      setState(() {
+        epcsEscaneados.clear();
+        tarimasEscaneadas.clear();
+        cantidadSeparada = 0;
+        cantidadPendiente = cantidadProgramada;
+        _epcController.clear();
+      });
+
+      // También limpiar los datos en el mapa global
+      if (_epcsEscaneadosPorLogistica.containsKey(logisticaKey) &&
+          _epcsEscaneadosPorLogistica[logisticaKey]!.containsKey(productKey)) {
+        _epcsEscaneadosPorLogistica[logisticaKey]![productKey]!.clear();
+      }
+
+      print(
+          "✅ resetLocalData() completado para $productKey en logística $logisticaKey");
+      print(
+          "📊 Estado después del reset: ${epcsEscaneados.length} EPCs, $cantidadSeparada separados");
+    } else {
+      print("⚠️ resetLocalData() llamado cuando el widget no está montado");
+    }
   }
 
   @override
@@ -73,12 +192,16 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
 
   void _inicializarDatosGuardados() {
     final productKey = _productKey;
+    final logisticaKey = _logisticaKey;
 
     // Inicializar las estructuras globales si no existen
     _globalEpcsEscaneados[productKey] ??= {};
     _globalTarimasEscaneadas[productKey] ??= [];
     _globalCantidadesSeparadas[productKey] ??= 0.0;
-    _allEpcsMap[productKey] ??= {};
+
+    // Inicializar el mapa de EPCs por logística
+    _epcsEscaneadosPorLogistica[logisticaKey] ??= {};
+    _epcsEscaneadosPorLogistica[logisticaKey]![productKey] ??= {};
 
     // Asignar valores locales desde el almacenamiento global
     setState(() {
@@ -87,6 +210,11 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
       cantidadSeparada = _globalCantidadesSeparadas[productKey]!;
       cantidadPendiente = cantidadProgramada - cantidadSeparada;
     });
+
+    print(
+        "🔄 Inicializado widget para producto $productKey en logística $logisticaKey");
+    print(
+        "📊 EPCs cargados: ${epcsEscaneados.length}, cantidad separada: $cantidadSeparada");
   }
 
   void _inicializarCantidades() {
@@ -152,6 +280,27 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
   }
 
   void _procesarTarima(String epc, Map<String, dynamic> tarimaData) {
+    final productKey = _productKey;
+    final logisticaKey = _logisticaKey;
+
+    // Verificar si este EPC ya fue escaneado en CUALQUIER logística
+    bool epcUsadoGlobalmente = false;
+
+    for (var logisticaMap in _epcsEscaneadosPorLogistica.values) {
+      for (var productoEpcs in logisticaMap.values) {
+        if (productoEpcs.contains(epc)) {
+          epcUsadoGlobalmente = true;
+          break;
+        }
+      }
+      if (epcUsadoGlobalmente) break;
+    }
+
+    if (epcUsadoGlobalmente) {
+      _mostrarError('Este EPC ya fue escaneado en otra logística');
+      return;
+    }
+
     if (!epcsEscaneados.contains(epc)) {
       final unidadLogistica = widget.registro['unidad'];
       double cantidadTarima = 0;
@@ -187,11 +336,18 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
           cantidadSeparada += cantidadTarima;
 
           // Actualizar almacenamiento global
-          final productKey = _productKey;
           _globalEpcsEscaneados[productKey]!.add(epc);
           _globalTarimasEscaneadas[productKey] = List.from(tarimasEscaneadas);
           _globalCantidadesSeparadas[productKey] = cantidadSeparada;
-          _allEpcsMap[productKey]!.add(epc);
+
+          // Actualizar el mapa de EPCs por logística
+          _epcsEscaneadosPorLogistica[logisticaKey]![productKey]!.add(epc);
+
+          print(
+              "➕ EPC $epc agregado al producto $productKey en logística $logisticaKey");
+          print("📊 Total EPCs para este producto: ${epcsEscaneados.length}");
+          print(
+              "📊 Total EPCs para esta logística: ${getEpcsByLogistica(logisticaKey).length}");
         });
 
         _epcController.clear();
@@ -432,6 +588,9 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                         ),
                         padding: EdgeInsets.zero,
                         onPressed: () {
+                          final productKey = _productKey;
+                          final logisticaKey = _logisticaKey;
+
                           setState(() {
                             // Actualizar estado local
                             cantidadPendiente += tarima['cantidadUsada'];
@@ -440,14 +599,24 @@ class MaterialSeparationWidgetState extends State<MaterialSeparationWidget> {
                             tarimasEscaneadas.removeAt(index);
 
                             // Actualizar almacenamiento global
-                            final productKey = _productKey;
                             _globalEpcsEscaneados[productKey]!
                                 .remove(tarima['epc']);
                             _globalTarimasEscaneadas[productKey] =
                                 List.from(tarimasEscaneadas);
                             _globalCantidadesSeparadas[productKey] =
                                 cantidadSeparada;
-                            _allEpcsMap[productKey]!.remove(tarima['epc']);
+
+                            // Actualizar el mapa de EPCs por logística
+                            _epcsEscaneadosPorLogistica[logisticaKey]![
+                                    productKey]!
+                                .remove(tarima['epc']);
+
+                            print(
+                                "➖ EPC eliminado: ${tarima['epc']} para $productKey en logística $logisticaKey");
+                            print(
+                                "📊 Total EPCs para este producto: ${epcsEscaneados.length}");
+                            print(
+                                "📊 Total EPCs para esta logística: ${getEpcsByLogistica(logisticaKey).length}");
                           });
                         },
                       ),

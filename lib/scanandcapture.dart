@@ -208,9 +208,14 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       await platform.invokeMethod('stopScan');
       _isScanning = false;
     } catch (e) {
-      if (mounted) {
-        _showSnackBar("Error al detener escaneo: $e");
-      }
+      // Solo registra el error en la consola pero no lo muestra al usuario
+      print("Error al detener escaneo (ignorado): $e");
+
+      // Aún así, actualiza el estado interno
+      _isScanning = false;
+
+      // No mostramos SnackBar para este error específico
+      // _showSnackBar("Error al detener escaneo: $e");  <-- Comenta o elimina esta línea
     }
   }
 
@@ -391,134 +396,149 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     setState(() => isUploading = true);
 
     try {
-      // Verificar si es una revisión de aduana y realizar la validación adecuada
-      if (isAduanaReview) {
-        // Verificar que los campos específicos de aduana estén completos
-        bool allChecked = true;
-        aduanaChecklist.forEach((key, value) {
-          if (!value) allChecked = false;
-        });
+      // Primero enviamos los datos principales SIN imágenes
+      final request = http.MultipartRequest('POST',
+          Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create"));
 
-        if (!allChecked) {
-          _showSnackBar(
-              "Debe completar todos los puntos del checklist de aduana.");
-          setState(() => isUploading = false);
-          return;
-        }
+      final listaEPCs =
+          epcs.map((epc) => epc['trazabilidad'].toString()).toList();
 
-        if (documentacionController.text.isEmpty) {
-          _showSnackBar("Por favor complete la información de documentación.");
-          setState(() => isUploading = false);
-          return;
-        }
+      DateTime fecha;
+      try {
+        fecha = DateTime.parse(fechaController.text);
+      } catch (e) {
+        fecha = DateTime.now();
+      }
 
-        // Actualizar el estado de la revisión
-        if (widget.reviewId != null) {
+      request.fields.addAll({
+        'Fecha': fecha.toIso8601String(),
+        'NombreOperador': operadorController.text,
+        'NumeroLogistica': noLogisticaController.text,
+        'Observaciones': observacionesController.text,
+        'FechaCreacion': DateTime.now().toIso8601String(),
+        'Dispositivo': "ET40",
+      });
+
+      for (int i = 0; i < listaEPCs.length; i++) {
+        request.fields['ListaEPCs[$i]'] = listaEPCs[i];
+      }
+
+      // Enviamos la solicitud principal SIN fotos
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // Si los datos principales se subieron correctamente, procedemos con las fotos
+        if (images.isNotEmpty) {
           try {
-            final updateResponse = await http.put(
-              Uri.parse(
-                  'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
-              body: json.encode("Aprobado en Revisión de Aduana"),
-              headers: {'Content-Type': 'application/json'},
-            );
+            final numeroLogistica = noLogisticaController.text;
+            const int batchSize = 5; // Tamaño del lote: 5 fotos
+            int successCount = 0;
+            int failedCount = 0;
 
-            if (updateResponse.statusCode != 200 &&
-                updateResponse.statusCode != 201) {
-              throw Exception(
-                  'Error al actualizar estado de revisión: ${updateResponse.statusCode}');
+            // Dividir las imágenes en lotes de 5
+            for (int i = 0; i < images.length; i += batchSize) {
+              final int end = (i + batchSize < images.length)
+                  ? i + batchSize
+                  : images.length;
+              final batch = images.sublist(i, end);
+
+              if (mounted) {
+                _showSnackBar(
+                    "Subiendo lote ${(i / batchSize).floor() + 1} de ${(images.length / batchSize).ceil()} (${batch.length} fotos)");
+              }
+
+              // Crear solicitud para este lote específico
+              final photosRequest = http.MultipartRequest(
+                  'POST',
+                  Uri.parse(
+                      "http://172.16.10.31/api/RegistrosLogistica/AddPhotos/$numeroLogistica"));
+
+              // Añadir solo las fotos de este lote
+              for (var image in batch) {
+                if (await image.exists()) {
+                  final stream = http.ByteStream(image.openRead());
+                  final length = await image.length();
+
+                  final multipartFile = http.MultipartFile(
+                      'Fotos', stream, length,
+                      filename:
+                          'lote_${(i / batchSize).floor()}_${DateTime.now().millisecondsSinceEpoch}.jpg');
+
+                  photosRequest.files.add(multipartFile);
+                }
+              }
+
+              try {
+                // Enviar este lote específico con timeout
+                final batchResponse =
+                    await photosRequest.send().timeout(Duration(seconds: 30));
+                final batchResult =
+                    await http.Response.fromStream(batchResponse);
+
+                if (batchResponse.statusCode == 200 ||
+                    batchResponse.statusCode == 201) {
+                  successCount += batch.length;
+                  if (mounted) {
+                    _showSnackBar(
+                        "Progreso: $successCount de ${images.length} fotos subidas");
+                  }
+                } else {
+                  failedCount += batch.length;
+                  print(
+                      "Error en lote ${(i / batchSize).floor() + 1}: ${batchResult.body}");
+                }
+              } catch (e) {
+                failedCount += batch.length;
+                print("Error subiendo lote ${(i / batchSize).floor() + 1}: $e");
+                // Continuamos con el siguiente lote en caso de error
+              }
+
+              // Pequeña pausa entre lotes para evitar sobrecargar el servidor
+              await Future.delayed(Duration(milliseconds: 500));
+            }
+
+            if (mounted) {
+              if (failedCount > 0) {
+                _showSnackBar(
+                    "Subida parcial: $successCount de ${images.length} fotos subidas");
+              } else {
+                _showSnackBar("Todas las fotos subidas correctamente");
+              }
             }
           } catch (e) {
-            throw Exception('Error al actualizar estado: $e');
+            print("Error en la subida por lotes: $e");
+            _showSnackBar("Error al subir fotos: $e");
           }
         }
 
-        // Crear el registro de aduana
-        final aduanaRequest = http.MultipartRequest(
-            'POST', Uri.parse("http://172.16.10.31/api/AduanaReview/create"));
+        // Actualizar estado si es necesario
+        if (widget.reviewId != null) {
+          final putUrl =
+              "http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status";
 
-        aduanaRequest.fields.addAll({
-          'id_logistics_review': widget.reviewId.toString(),
-          'documentacion_correcta':
-              aduanaChecklist['documentacion_correcta'].toString(),
-          'sellos_completos': aduanaChecklist['sellos_completos'].toString(),
-          'embalaje_correcto': aduanaChecklist['embalaje_correcto'].toString(),
-          'etiquetado_aduana_correcto':
-              aduanaChecklist['etiquetado_aduana_correcto'].toString(),
-          'peso_bruto_correcto':
-              aduanaChecklist['peso_bruto_correcto'].toString(),
-          'documentacion': documentacionController.text,
-          'observaciones': observacionesController.text,
-          'fecha_revision': DateTime.now().toIso8601String(),
-          'revisado_por': operadorController.text,
-        });
+          final putResponse = await http.put(
+            Uri.parse(putUrl),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode("Evidencias Cargadas"), // Enviar solo el string
+          );
 
-        // Añadir imágenes
-        for (var i = 0; i < images.length; i++) {
-          final image = images[i];
-          if (await image.exists()) {
-            final stream = http.ByteStream(image.openRead());
-            final length = await image.length();
-
-            final multipartFile = http.MultipartFile('fotos', stream, length,
-                filename:
-                    'aduana_${DateTime.now().millisecondsSinceEpoch}_$i.jpg');
-
-            aduanaRequest.files.add(multipartFile);
+          if (putResponse.statusCode == 200) {
+            print("Estado actualizado correctamente a 'Evidencias Cargadas'");
+          } else {
+            print("Error al actualizar el estado: ${putResponse.body}");
           }
         }
 
-        final aduanaResponse = await aduanaRequest.send();
-        final aduanaResult = await http.Response.fromStream(aduanaResponse);
-
-        if (aduanaResponse.statusCode != 200 &&
-            aduanaResponse.statusCode != 201) {
-          throw Exception(
-              'Error al crear revisión de aduana: ${aduanaResult.body}');
-        }
-
-        // Limpieza tras éxito
         await _clearAllData();
         if (mounted) {
-          _showSnackBar("Revisión de aduana completada exitosamente");
-          Navigator.pop(context, true); // Regresar a la pantalla anterior
+          _showSnackBar("Datos subidos exitosamente");
+          Navigator.pop(
+              context, true); // Regresa a la pantalla anterior con éxito
         }
       } else {
-        // Flujo original para registro de logística
-        final request = http.MultipartRequest('POST',
-            Uri.parse("http://172.16.10.31/api/RegistrosLogistica/create"));
-
-        request.fields.addAll({
-          'Fecha': fechaController.text,
-          'NombreOperador': operadorController.text,
-          'NumeroLogistica': noLogisticaController.text,
-          'Observaciones': observacionesController.text,
-          'FechaCreacion': DateTime.now().toIso8601String(),
-          'Dispositivo': "ET40",
-          'ListaEPCs': jsonEncode(epcs), // Send complete EPC objects
-        });
-
-        for (var image in images) {
-          if (await image.exists()) {
-            final stream = http.ByteStream(image.openRead());
-            final length = await image.length();
-
-            final multipartFile = http.MultipartFile('Fotos', stream, length,
-                filename: '${DateTime.now().millisecondsSinceEpoch}.jpg');
-
-            request.files.add(multipartFile);
-          }
-        }
-
-        final streamedResponse = await request.send();
-        final response = await http.Response.fromStream(streamedResponse);
-
-        if (response.statusCode == 200) {
-          await _clearAllData();
-          if (mounted) _showSnackBar("Datos subidos exitosamente");
-        } else {
-          throw HttpException(
-              'Error del servidor: ${response.statusCode}\n${response.body}');
-        }
+        throw HttpException(
+            'Error del servidor: ${response.statusCode}\n${response.body}');
       }
     } catch (e) {
       _showErrorDialog("Error de conexión", "Detalles: ${e.toString()}");
@@ -667,9 +687,7 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
               children: [
                 Center(
                   child: Text(
-                    isAduanaReview
-                        ? "Confirmación de Revisión de Aduana"
-                        : "Confirmación de Datos",
+                    "Confirmación de Datos",
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -716,43 +734,12 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                     labelText: "No. Logística *",
                     border: OutlineInputBorder(),
                   ),
-                  enabled:
-                      !isAduanaReview, // No permitir cambios si es revisión de aduana
                 ),
-                SizedBox(height: 8),
-
-                // Campos adicionales para la revisión de aduana
-                if (isAduanaReview) ...[
-                  _buildAduanaChecklistItem(
-                      'Documentación correcta', 'documentacion_correcta'),
-                  _buildAduanaChecklistItem(
-                      'Sellos completos', 'sellos_completos'),
-                  _buildAduanaChecklistItem(
-                      'Embalaje correcto', 'embalaje_correcto'),
-                  _buildAduanaChecklistItem('Etiquetado de aduana correcto',
-                      'etiquetado_aduana_correcto'),
-                  _buildAduanaChecklistItem(
-                      'Peso bruto correcto', 'peso_bruto_correcto'),
-                  SizedBox(height: 8),
-                  TextField(
-                    controller: documentacionController,
-                    decoration: InputDecoration(
-                      labelText: "Documentación *",
-                      border: OutlineInputBorder(),
-                      hintText:
-                          "Documentos presentados, números de referencia, etc.",
-                    ),
-                    maxLines: 3,
-                  ),
-                ],
-
                 SizedBox(height: 8),
                 TextField(
                   controller: observacionesController,
                   decoration: InputDecoration(
-                    labelText: isAduanaReview
-                        ? "Observaciones Adicionales"
-                        : "Observaciones",
+                    labelText: "Observaciones",
                     border: OutlineInputBorder(),
                   ),
                   maxLines: 3,
@@ -794,23 +781,6 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           ),
         );
       },
-    );
-  }
-
-  // Widget para cada elemento del checklist de aduana
-  Widget _buildAduanaChecklistItem(String label, String key) {
-    return CheckboxListTile(
-      title: Text(label),
-      value: aduanaChecklist[key],
-      onChanged: (bool? value) {
-        if (value != null) {
-          setState(() {
-            aduanaChecklist[key] = value;
-          });
-        }
-      },
-      controlAffinity: ListTileControlAffinity.leading,
-      contentPadding: EdgeInsets.symmetric(horizontal: 0, vertical: 4),
     );
   }
 

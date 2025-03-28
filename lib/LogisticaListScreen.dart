@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:zebra_scanner_app/LogisticaDetailScreen.dart';
+import 'package:zebra_scanner_app/LogisticaDetailScreen.dart'; // You'll need to create this file
 
 class LogisticaListScreen extends StatefulWidget {
   const LogisticaListScreen({Key? key}) : super(key: key);
@@ -16,18 +16,41 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   bool isLoading = true;
   String? errorMessage;
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController searchController = TextEditingController();
+  String searchQuery = '';
 
   // Variables para los filtros
   String? auxVentasSeleccionado;
   String? estatusSeleccionado;
   String? diasSeleccionado;
   String? completadoSeleccionado;
+  String? noLogisticaSeleccionado;
+
+  // Controlador para búsqueda por número de logística
+  final TextEditingController noLogisticaSearchController =
+      TextEditingController();
+  bool isSearchVisible = false;
 
   // Sets para almacenar valores únicos para los filtros
   Set<String> auxVentasOpciones = {};
   Set<String> estatusOpciones = {};
   Set<String> diasOpciones = {};
   Set<String> completadoOpciones = {};
+
+  // Lista de operadores
+  final List<String> operadores = [
+    'Jorge Lara Pachecho',
+    'Luis Manuel Rodriguez Zacarias',
+    'Adrian Chavez Marquez',
+    'Luis Adrian Segura Aguilar',
+    'Ramon Martinez Almaguer',
+    'Jose Perez Gonzales',
+    'Jose Garcia Torres',
+    'Luz Marlén Sánchez Romero'
+  ];
+
+  // Operador seleccionado para la separación
+  String? operadorSeleccionado;
 
   static const Map<String, Color> semaforoColors = {
     'ROJO': Colors.red,
@@ -41,12 +64,30 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   void initState() {
     super.initState();
     _fetchLogisticas();
+    searchController.addListener(_onSearchChanged);
+    noLogisticaSearchController.addListener(_onNoLogisticaSearchChanged);
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
+    searchController.dispose();
+    noLogisticaSearchController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    setState(() {
+      searchQuery = searchController.text;
+      _aplicarFiltros();
+    });
+  }
+
+  void _onNoLogisticaSearchChanged() {
+    setState(() {
+      noLogisticaSeleccionado = noLogisticaSearchController.text;
+      _aplicarFiltros();
+    });
   }
 
   String _safeToString(dynamic value) {
@@ -99,6 +140,11 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
         auxVentasOpciones.add(logistica['auxVentas'].toString());
       }
 
+      // Agregar opciones de Estatus
+      if (logistica['estatus'] != null) {
+        estatusOpciones.add(logistica['estatus'].toString());
+      }
+
       // Procesar detalles para otros filtros
       List<dynamic> detalles = logistica['detalles'] ?? [];
       for (var detalle in detalles) {
@@ -120,24 +166,49 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       logisticasFiltradas = logisticas.where((logistica) {
         bool cumpleFiltros = true;
 
+        // Búsqueda por número de logística
+        if (searchQuery.isNotEmpty) {
+          String noLogistica =
+              _safeToString(logistica['nO_LOGISTICA']).toLowerCase();
+          cumpleFiltros =
+              cumpleFiltros && noLogistica.contains(searchQuery.toLowerCase());
+        }
+
+        // Filtro por número de logística específico
+        if (noLogisticaSeleccionado != null &&
+            noLogisticaSeleccionado!.isNotEmpty) {
+          String noLogistica = _safeToString(logistica['nO_LOGISTICA']);
+          cumpleFiltros =
+              cumpleFiltros && noLogistica == noLogisticaSeleccionado;
+        }
+
         // Filtro de Aux Ventas
         if (auxVentasSeleccionado != null) {
           cumpleFiltros = cumpleFiltros &&
               logistica['auxVentas']?.toString() == auxVentasSeleccionado;
         }
 
+        // Filtro de Estatus general
+        if (estatusSeleccionado != null) {
+          // Comprobar si coincide con el estatus general
+          bool coincideEstatusGeneral =
+              logistica['estatus']?.toString() == estatusSeleccionado;
+
+          // Comprobar si coincide con algún estatus en los detalles
+          List<dynamic> detalles = logistica['detalles'] ?? [];
+          bool coincideEstatusDetalles = detalles.any((detalle) =>
+              detalle['estatus2']?.toString() == estatusSeleccionado);
+
+          cumpleFiltros = cumpleFiltros &&
+              (coincideEstatusGeneral || coincideEstatusDetalles);
+        }
+
         // Filtros basados en detalles
-        if (estatusSeleccionado != null ||
-            diasSeleccionado != null ||
-            completadoSeleccionado != null) {
+        if (diasSeleccionado != null || completadoSeleccionado != null) {
           List<dynamic> detalles = logistica['detalles'] ?? [];
           bool cumpleDetalles = detalles.any((detalle) {
             bool cumpleDetalle = true;
 
-            if (estatusSeleccionado != null) {
-              cumpleDetalle = cumpleDetalle &&
-                  detalle['estatus2']?.toString() == estatusSeleccionado;
-            }
             if (diasSeleccionado != null) {
               cumpleDetalle = cumpleDetalle &&
                   detalle['dias']?.toString() == diasSeleccionado;
@@ -163,6 +234,11 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       estatusSeleccionado = null;
       diasSeleccionado = null;
       completadoSeleccionado = null;
+      noLogisticaSeleccionado = null;
+      noLogisticaSearchController.clear();
+      searchController.clear();
+      searchQuery = '';
+      isSearchVisible = false;
       logisticasFiltradas = logisticas;
     });
   }
@@ -184,14 +260,487 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     );
   }
 
+  // Método para confirmar separación - Versión actualizada con manejo de registros existentes
+  Future<void> _confirmarSeparacion(dynamic logistica) async {
+    // Reset the selected operator
+    operadorSeleccionado = null;
+
+    // Show the confirmation modal
+    final selectedOperator = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text('Confirmar Separación de Material'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Logística: #${_safeToString(logistica['nO_LOGISTICA'])}',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 8),
+                    Text('Cliente: ${_safeToString(logistica['cliente'])}'),
+                    SizedBox(height: 8),
+                    Text(
+                        'Aux. Ventas: ${_safeToString(logistica['auxVentas'])}'),
+                    SizedBox(height: 16),
+                    Text('Seleccione el operador de separación:',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          hint: Text('Seleccionar operador'),
+                          value: operadorSeleccionado,
+                          items: operadores.map((String operador) {
+                            return DropdownMenuItem<String>(
+                              value: operador,
+                              child: Text(operador),
+                            );
+                          }).toList(),
+                          onChanged: (String? value) {
+                            setState(() {
+                              operadorSeleccionado = value;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(null),
+                  child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: operadorSeleccionado == null
+                      ? null // Deshabilitar si no hay operador seleccionado
+                      : () => Navigator.of(context).pop(operadorSeleccionado),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF46707e),
+                    disabledBackgroundColor: Colors.grey.shade300,
+                  ),
+                  child: Text('Confirmar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (selectedOperator != null) {
+      try {
+        // Show loading indicator
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            return Center(
+              child: CircularProgressIndicator(),
+            );
+          },
+        );
+
+        // Prepare the payload
+        final Map<String, dynamic> payload = {
+          "no_Logistica": logistica['nO_LOGISTICA'],
+          "cliente": logistica['cliente'],
+          "operador_Separador": selectedOperator,
+          "estatus": "En Separación de Material", // Siempre este estado inicial
+          "auxiliarVentas": logistica['auxVentas'],
+          "lastUpdate":
+              DateTime.now().toIso8601String() // Incluir la fecha actual
+        };
+
+        // Log the payload for debugging
+        print("📦 Payload enviado a la API: ${jsonEncode(payload)}");
+
+        // URL correcta de la API
+        final apiUrl = 'http://172.16.10.31/api/logistics_to_review';
+        print("🔗 URL de la petición: $apiUrl");
+
+        // Make API call
+        final response = await http
+            .post(
+              Uri.parse(apiUrl),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(payload),
+            )
+            .timeout(Duration(seconds: 15));
+
+        // Close loading indicator
+        if (Navigator.canPop(context)) {
+          Navigator.of(context).pop();
+        }
+
+        // Log response for debugging
+        print(
+            "📫 Respuesta del servidor (${response.statusCode}): ${response.body}");
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          // Registro creado exitosamente
+          _procesarRespuestaExitosa(response, logistica, selectedOperator);
+        } else if (response.statusCode == 400 || response.statusCode == 409) {
+          // Posible registro duplicado o conflicto
+          _manejarRegistroExistente(response, logistica, selectedOperator);
+        } else {
+          throw Exception(
+              'Error en la respuesta: ${response.statusCode} - ${response.body}');
+        }
+      } catch (e) {
+        // Close loading indicator if it's still showing
+        if (Navigator.canPop(context)) {
+          Navigator.of(context).pop();
+        }
+
+        print("❌ Error en la operación de separación: ${e.toString()}");
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('Error al crear registro de separación: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  // Método para procesar respuesta exitosa
+  void _procesarRespuestaExitosa(
+      http.Response response, dynamic logistica, String selectedOperator) {
+    try {
+      // Parse the response to get the ID
+      final responseData = json.decode(response.body);
+      print("Respuesta completa: $responseData");
+
+      // Extraer los IDs - usar 0 como valor por defecto
+      int separacionId = responseData['id'] ?? 0;
+
+      // Intentar obtener el ID de revisión de diferentes formas posibles
+      int? revisionId;
+      if (responseData.containsKey('id_Revision')) {
+        revisionId = responseData['id_Revision'];
+      } else if (responseData.containsKey('idRevision')) {
+        revisionId = responseData['idRevision'];
+      } else if (responseData.containsKey('revision_id')) {
+        revisionId = responseData['revision_id'];
+      }
+
+      // Si no se encontró el ID de revisión, buscar en la respuesta completa
+      if (revisionId == null) {
+        String responseStr = response.body;
+        final RegExp idRevisionRegExp = RegExp(r'"id_Revision"\s*:\s*(\d+)');
+        final match = idRevisionRegExp.firstMatch(responseStr);
+        if (match != null && match.groupCount >= 1) {
+          revisionId = int.tryParse(match.group(1)!) ?? 0;
+        }
+      }
+
+      // Si todavía no se encuentra, asignar el mismo valor que separacionId
+      revisionId ??= separacionId;
+
+      print("🆔 ID de Separación obtenido: $separacionId");
+      print("🆔 ID de Revisión obtenido: $revisionId");
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Registro de separación creado exitosamente'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      _navegarALogisticaDetail(
+          logistica, selectedOperator, separacionId, revisionId);
+    } catch (parseError) {
+      print("⚠️ Error al procesar la respuesta: $parseError");
+      print("⚠️ Contenido de la respuesta: ${response.body}");
+
+      _manejarErrorParseo(response, logistica, selectedOperator);
+    }
+  }
+
+  // Método para manejar error de parseo
+  void _manejarErrorParseo(
+      http.Response response, dynamic logistica, String selectedOperator) {
+    // En caso de error, intentar enviar la logística sin revisionId
+    int separacionId = 0;
+    try {
+      final responseData = json.decode(response.body);
+      if (responseData.containsKey('id')) {
+        separacionId = responseData['id'];
+      }
+    } catch (e) {
+      print("⚠️ Error adicional al intentar procesar id: $e");
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+            'Advertencia: Registro creado, pero hubo error al procesar la respuesta'),
+        backgroundColor: Colors.orange,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
+    _navegarALogisticaDetail(
+        logistica, selectedOperator, separacionId, separacionId);
+  }
+
+  // Método para manejar registro existente
+  void _manejarRegistroExistente(http.Response response, dynamic logistica,
+      String selectedOperator) async {
+    try {
+      final responseData = json.decode(response.body);
+      print("Respuesta de error por duplicado: $responseData");
+
+      // Extraer mensaje, ID de revisión, estatus y operador actual
+      String mensaje = responseData['message'] ?? 'Registro duplicado';
+      int revisionId = responseData['id_Revision'] ?? 0;
+      String estatus = responseData['estatus'] ?? 'Desconocido';
+
+      // Extraer el operador actual del registro existente (si está disponible)
+      // Usar el nombre correcto del campo según la respuesta del backend: 'operador'
+      String operadorActual = responseData['operador'] ?? '';
+
+      // Verificar si el operador seleccionado es el mismo que el del registro
+      bool mismoOperador =
+          operadorActual.toLowerCase() == selectedOperator.toLowerCase();
+
+      // Mostrar diálogo con la información
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Registro Existente'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(mensaje),
+                SizedBox(height: 12),
+                Text('ID de Revisión: $revisionId'),
+                Text('Estatus actual: $estatus'),
+                if (operadorActual.isNotEmpty)
+                  Text('Operador actual: $operadorActual'),
+              ],
+            ),
+            actions: [
+              // Si es el mismo operador, permitir continuar sin cambiar el estado
+              if (mismoOperador)
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    // Navegar directamente al detalle sin cambiar el estado
+                    _navegarALogisticaDetail(
+                        logistica, selectedOperator, revisionId, revisionId);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                  ),
+                  child: Text('Continuar con el mismo operador'),
+                ),
+              // Si es un estatus rechazado, permitir reanudar la separación
+              if (estatus == "Rechazado en Separación de Producto")
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _cambiarEstatusRechazado(
+                        revisionId, logistica, selectedOperator);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF46707e),
+                  ),
+                  child: Text('Reanudar Separación'),
+                ),
+              // Si no es el mismo operador y no es rechazado, solo mostrar botón de entendido
+              if (!mismoOperador &&
+                  estatus != "Rechazado en Separación de Producto")
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('Entendido'),
+                ),
+            ],
+          );
+        },
+      );
+    } catch (e) {
+      print("⚠️ Error al procesar respuesta de duplicado: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Error al procesar la respuesta. No se puede continuar con la separación.'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  // Método para cambiar el estatus en caso de registro rechazado
+  Future<void> _cambiarEstatusRechazado(
+      int revisionId, dynamic logistica, String selectedOperator) async {
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return Center(
+            child: CircularProgressIndicator(),
+          );
+        },
+      );
+
+      // URL para actualizar el estatus
+      final apiUrl =
+          'http://172.16.10.31/api/logistics_to_review/$revisionId/status';
+      print("🔗 URL para actualización de estatus: $apiUrl");
+
+      // Hacer la petición PUT para actualizar el estatus
+      final response = await http
+          .put(
+            Uri.parse(apiUrl),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode("En Separación de Material"),
+          )
+          .timeout(Duration(seconds: 15));
+
+      // Cerrar indicador de carga
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      print(
+          "📫 Respuesta de actualización (${response.statusCode}): ${response.body}");
+
+      if (response.statusCode == 200) {
+        // Parsear la respuesta
+        final responseData = json.decode(response.body);
+        final record = responseData['record'];
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Estatus actualizado correctamente. Continuando con la separación.'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+
+        // Navegar a la pantalla de detalle con la información
+        _navegarALogisticaDetail(logistica, selectedOperator,
+            record['id_Revision'] ?? 0, record['id_Revision'] ?? 0);
+      } else {
+        throw Exception(
+            'Error al actualizar estatus: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      // Close loading indicator if it's still showing
+      if (Navigator.canPop(context)) {
+        Navigator.of(context).pop();
+      }
+
+      print("❌ Error al actualizar estatus: ${e.toString()}");
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al actualizar estatus: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  // Método para navegar a la pantalla de detalle
+  void _navegarALogisticaDetail(
+      dynamic logistica, String operador, int separacionId, int revisionId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LogisticaDetailScreen(
+          noLogistica: logistica['nO_LOGISTICA'],
+          operador: operador,
+          separacionId: separacionId,
+          revisionId: revisionId,
+          logisticaCompleta: logistica,
+        ),
+      ),
+    );
+  }
+
   Color _getCardColor(String? semaforo) {
     return semaforoColors[semaforo?.toUpperCase() ?? ''] ?? Colors.grey;
+  }
+
+  // Método para determinar el color del estatus
+  Color _getEstatusColor(String estatus) {
+    if (estatus == null || estatus == 'Sin Estatus') {
+      return Colors.grey;
+    }
+
+    // Estatus de rechazo
+    if (estatus == "Rechazado en Separación de Producto" ||
+        estatus == "Rechazado en Revisión de Calidad") {
+      return Colors.deepOrange.shade700;
+    }
+
+    // Éxito - procesos completados o aprobados
+    if (estatus == 'Embarque Completado' ||
+        estatus == 'Facturado' ||
+        estatus == 'Entregado' ||
+        estatus == 'Validado por las Antenas' ||
+        estatus == 'Aprobado en Revisión de Calidad' ||
+        estatus == 'Validado por Aduana') {
+      return Colors.green.shade700;
+    }
+
+    // Advertencia - en proceso
+    if (estatus.startsWith('En ') ||
+        estatus == 'Material Separado' ||
+        estatus == 'En Tránsito') {
+      return Colors.orange.shade700;
+    }
+
+    // Información - observaciones y estados intermedios
+    if (estatus == 'Aprobado con Observaciones en Calidad' ||
+        estatus == 'Evidencias Cargadas' ||
+        estatus == 'Carril Asignado por Aduana') {
+      return Colors.blue.shade700;
+    }
+
+    // Por defecto
+    return Colors.grey.shade700;
   }
 
   Widget _buildLogisticaCard(dynamic logistica) {
     List<dynamic> detalles = logistica['detalles'] ?? [];
     // Color base del diseño
     Color baseColor = Color(0xFF85B6C4);
+
+    // Estatus de la logística
+    String estatus = logistica['estatus'] ?? 'Sin Estatus';
+
+    // Determinar el color del estatus basado en su valor
+    Color estatusColor = _getEstatusColor(estatus);
 
     return Container(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -223,20 +772,63 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => LogisticaDetailScreen(
-                noLogistica: logistica['nO_LOGISTICA'],
+          onTap: () {
+            // Show action bottom sheet
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
               ),
-            ),
-          ),
+              builder: (BuildContext context) {
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom,
+                  ),
+                  child: Container(
+                    padding: EdgeInsets.only(
+                      top: 20,
+                      left: 20,
+                      right: 20,
+                      bottom: 20 +
+                          MediaQuery.of(context)
+                              .padding
+                              .bottom, // Padding adicional para el área segura
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Acciones para Logística #${_safeToString(logistica['nO_LOGISTICA'])}',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                        SizedBox(height: 20),
+                        ListTile(
+                          leading: Icon(Icons.assignment, color: baseColor),
+                          title: Text('Iniciar Separación de Material'),
+                          onTap: () {
+                            Navigator.pop(context); // Close bottom sheet
+                            _confirmarSeparacion(logistica);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
           child: Padding(
             padding: EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header
+                // Header modificado para incluir estatus
                 Row(
                   children: [
                     Container(
@@ -277,6 +869,26 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+                    // Estatus Badge - Se añade a la derecha con texto blanco
+                    Container(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color:
+                            estatusColor, // Color sólido en lugar de transparencia
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        estatus,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white, // Texto blanco como solicitaste
+                          fontWeight: FontWeight.bold,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ),
                   ],
@@ -383,6 +995,25 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                             .map((detalle) => _buildDetalleItem(detalle))
                             .toList(),
                       ),
+
+                // Botón para iniciar separación
+                SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _confirmarSeparacion(logistica),
+                    icon: Icon(Icons.assignment_outlined),
+                    label: Text('Iniciar Separación de Material'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: baseColor,
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -434,7 +1065,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.bold,
-              color: baseColor.shade700,
+              color: baseColor,
               height: 1.2,
             ),
             overflow: TextOverflow.ellipsis,
@@ -772,121 +1403,173 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        title: isSearchVisible
+            ? TextField(
+                controller: noLogisticaSearchController,
+                decoration: InputDecoration(
+                  hintText: 'Buscar por No. Logística',
+                  hintStyle: TextStyle(color: Colors.white70),
+                  border: InputBorder.none,
+                  suffixIcon: IconButton(
+                    icon: Icon(Icons.clear, color: Colors.white),
+                    onPressed: () {
+                      noLogisticaSearchController.clear();
+                      setState(() {
+                        isSearchVisible = false;
+                        noLogisticaSeleccionado = null;
+                        _aplicarFiltros();
+                      });
+                    },
+                  ),
+                ),
+                style: TextStyle(color: Colors.white),
+                cursorColor: Colors.white,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (value) {
+                  setState(() {
+                    noLogisticaSeleccionado = value;
+                    _aplicarFiltros();
+                  });
+                },
+              )
+            : Text('Consulta de Logística'),
         actions: [
-          // Filtro Aux Ventas
-          PopupMenuButton<String>(
-            icon: Icon(Icons.person_outline),
-            tooltip: 'Filtrar por Aux Ventas',
-            onSelected: (String value) {
-              setState(() {
-                auxVentasSeleccionado = value;
-                _aplicarFiltros();
-              });
-            },
-            itemBuilder: (BuildContext context) => [
-              PopupMenuItem(
-                value: null,
-                child: Text('Todos'),
-                onTap: () {
-                  setState(() {
-                    auxVentasSeleccionado = null;
-                    _aplicarFiltros();
-                  });
-                },
-              ),
-              ...auxVentasOpciones.map((String value) => PopupMenuItem(
-                    value: value,
-                    child: Text(value),
-                  )),
-            ],
-          ),
-          // Filtro Estatus
-          PopupMenuButton<String>(
-            icon: Icon(Icons.assignment_outlined),
-            tooltip: 'Filtrar por Estatus',
-            onSelected: (String value) {
-              setState(() {
-                estatusSeleccionado = value;
-                _aplicarFiltros();
-              });
-            },
-            itemBuilder: (BuildContext context) => [
-              PopupMenuItem(
-                value: null,
-                child: Text('Todos'),
-                onTap: () {
-                  setState(() {
-                    estatusSeleccionado = null;
-                    _aplicarFiltros();
-                  });
-                },
-              ),
-              ...estatusOpciones.map((String value) => PopupMenuItem(
-                    value: value,
-                    child: Text(value),
-                  )),
-            ],
-          ),
-          // Filtro Días
-          PopupMenuButton<String>(
-            icon: Icon(Icons.calendar_today),
-            tooltip: 'Filtrar por Días',
-            onSelected: (String value) {
-              setState(() {
-                diasSeleccionado = value;
-                _aplicarFiltros();
-              });
-            },
-            itemBuilder: (BuildContext context) => [
-              PopupMenuItem(
-                value: null,
-                child: Text('Todos'),
-                onTap: () {
-                  setState(() {
-                    diasSeleccionado = null;
-                    _aplicarFiltros();
-                  });
-                },
-              ),
-              ...diasOpciones.map((String value) => PopupMenuItem(
-                    value: value,
-                    child: Text(value),
-                  )),
-            ],
-          ),
-          // Filtro Completado
-          PopupMenuButton<String>(
-            icon: Icon(Icons.check_circle_outline),
-            tooltip: 'Filtrar por Completado',
-            onSelected: (String value) {
-              setState(() {
-                completadoSeleccionado = value;
-                _aplicarFiltros();
-              });
-            },
-            itemBuilder: (BuildContext context) => [
-              PopupMenuItem(
-                value: null,
-                child: Text('Todos'),
-                onTap: () {
-                  setState(() {
-                    completadoSeleccionado = null;
-                    _aplicarFiltros();
-                  });
-                },
-              ),
-              ...completadoOpciones.map((String value) => PopupMenuItem(
-                    value: value,
-                    child: Text(value),
-                  )),
-            ],
-          ),
-          // Botón para limpiar filtros
+          // Icono de búsqueda para No. Logística
           IconButton(
-            icon: Icon(Icons.filter_list_off),
-            onPressed: _limpiarFiltros,
-            tooltip: 'Limpiar filtros',
+            icon: Icon(isSearchVisible ? Icons.search_off : Icons.search),
+            tooltip: 'Buscar por No. Logística',
+            onPressed: () {
+              setState(() {
+                isSearchVisible = !isSearchVisible;
+                if (!isSearchVisible) {
+                  noLogisticaSearchController.clear();
+                  noLogisticaSeleccionado = null;
+                  _aplicarFiltros();
+                }
+              });
+            },
           ),
+          // Filtro Aux Ventas
+          if (!isSearchVisible)
+            PopupMenuButton<String>(
+              icon: Icon(Icons.person_outline),
+              tooltip: 'Filtrar por Aux Ventas',
+              onSelected: (String value) {
+                setState(() {
+                  auxVentasSeleccionado = value;
+                  _aplicarFiltros();
+                });
+              },
+              itemBuilder: (BuildContext context) => [
+                PopupMenuItem(
+                  value: null,
+                  child: Text('Todos'),
+                  onTap: () {
+                    setState(() {
+                      auxVentasSeleccionado = null;
+                      _aplicarFiltros();
+                    });
+                  },
+                ),
+                ...auxVentasOpciones.map((String value) => PopupMenuItem(
+                      value: value,
+                      child: Text(value),
+                    )),
+              ],
+            ),
+          // Filtro Estatus
+          if (!isSearchVisible)
+            PopupMenuButton<String>(
+              icon: Icon(Icons.assignment_outlined),
+              tooltip: 'Filtrar por Estatus',
+              onSelected: (String value) {
+                setState(() {
+                  estatusSeleccionado = value;
+                  _aplicarFiltros();
+                });
+              },
+              itemBuilder: (BuildContext context) => [
+                PopupMenuItem(
+                  value: null,
+                  child: Text('Todos'),
+                  onTap: () {
+                    setState(() {
+                      estatusSeleccionado = null;
+                      _aplicarFiltros();
+                    });
+                  },
+                ),
+                ...estatusOpciones.map((String value) => PopupMenuItem(
+                      value: value,
+                      child: Text(value),
+                    )),
+              ],
+            ),
+          // Filtro Días
+          if (!isSearchVisible)
+            PopupMenuButton<String>(
+              icon: Icon(Icons.calendar_today),
+              tooltip: 'Filtrar por Días',
+              onSelected: (String value) {
+                setState(() {
+                  diasSeleccionado = value;
+                  _aplicarFiltros();
+                });
+              },
+              itemBuilder: (BuildContext context) => [
+                PopupMenuItem(
+                  value: null,
+                  child: Text('Todos'),
+                  onTap: () {
+                    setState(() {
+                      diasSeleccionado = null;
+                      _aplicarFiltros();
+                    });
+                  },
+                ),
+                ...diasOpciones.map((String value) => PopupMenuItem(
+                      value: value,
+                      child: Text(value),
+                    )),
+              ],
+            ),
+          // Filtro Completado
+          if (!isSearchVisible)
+            PopupMenuButton<String>(
+              icon: Icon(Icons.check_circle_outline),
+              tooltip: 'Filtrar por Completado',
+              onSelected: (String value) {
+                setState(() {
+                  completadoSeleccionado = value;
+                  _aplicarFiltros();
+                });
+              },
+              itemBuilder: (BuildContext context) => [
+                PopupMenuItem(
+                  value: null,
+                  child: Text('Todos'),
+                  onTap: () {
+                    setState(() {
+                      completadoSeleccionado = null;
+                      _aplicarFiltros();
+                    });
+                  },
+                ),
+                ...completadoOpciones.map((String value) => PopupMenuItem(
+                      value: value,
+                      child: Text(value),
+                    )),
+              ],
+            ),
+          // Botón para limpiar filtros
+          if (!isSearchVisible)
+            IconButton(
+              icon: Icon(Icons.filter_list_off),
+              onPressed: _limpiarFiltros,
+              tooltip: 'Limpiar filtros',
+            ),
+          // Botón para recargar
           IconButton(
             icon: Icon(Icons.refresh),
             onPressed: _fetchLogisticas,
@@ -897,63 +1580,81 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
           preferredSize: Size.fromHeight(auxVentasSeleccionado != null ||
                   estatusSeleccionado != null ||
                   diasSeleccionado != null ||
-                  completadoSeleccionado != null
+                  completadoSeleccionado != null ||
+                  (noLogisticaSeleccionado != null &&
+                      noLogisticaSeleccionado!.isNotEmpty)
               ? 30
               : 0),
           child: _buildFiltrosActivos(),
         ),
       ),
-      body: isLoading
-          ? Center(child: CircularProgressIndicator())
-          : errorMessage != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.error_outline, size: 48, color: Colors.red),
-                      SizedBox(height: 16),
-                      Text(
-                        errorMessage!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.red),
-                      ),
-                      SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        onPressed: _fetchLogisticas,
-                        icon: Icon(Icons.refresh),
-                        label: Text('Reintentar'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).primaryColor,
+      body: SafeArea(
+        child: isLoading
+            ? Center(child: CircularProgressIndicator())
+            : errorMessage != null
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error_outline, size: 48, color: Colors.red),
+                        SizedBox(height: 16),
+                        Text(
+                          errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.red),
                         ),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _fetchLogisticas,
-                  child: logisticasFiltradas.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No hay logísticas que coincidan con los filtros',
-                            style: TextStyle(fontSize: 16, color: Colors.grey),
+                        SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          onPressed: _fetchLogisticas,
+                          icon: Icon(Icons.refresh),
+                          label: Text('Reintentar'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).primaryColor,
                           ),
-                        )
-                      : ListView.builder(
-                          controller: _scrollController,
-                          physics: AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          itemCount: logisticasFiltradas.length,
-                          itemBuilder: (context, index) {
-                            return _buildLogisticaCard(
-                                logisticasFiltradas[index]);
-                          },
                         ),
-                ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _fetchLogisticas,
+                    child: logisticasFiltradas.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No hay logísticas que coincidan con los filtros',
+                              style:
+                                  TextStyle(fontSize: 16, color: Colors.grey),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: _scrollController,
+                            physics: AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.only(
+                              top: 8,
+                            ),
+                            itemCount: logisticasFiltradas.length,
+                            itemBuilder: (context, index) {
+                              return _buildLogisticaCard(
+                                  logisticasFiltradas[index]);
+                            },
+                          ),
+                  ),
+      ),
     );
   }
 
   Widget _buildFiltrosActivos() {
     List<Widget> chips = [];
+
+    if (noLogisticaSeleccionado != null &&
+        noLogisticaSeleccionado!.isNotEmpty) {
+      chips.add(_buildFilterChip('No. Logística: $noLogisticaSeleccionado', () {
+        setState(() {
+          noLogisticaSeleccionado = null;
+          noLogisticaSearchController.clear();
+          _aplicarFiltros();
+        });
+      }));
+    }
 
     if (auxVentasSeleccionado != null) {
       chips.add(_buildFilterChip('Aux Ventas: $auxVentasSeleccionado', () {
@@ -1012,8 +1713,4 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       ),
     );
   }
-}
-
-extension on Color {
-  get shade700 => null;
 }

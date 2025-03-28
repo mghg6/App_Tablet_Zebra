@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:zebra_scanner_app/AduanalistScreen.dart';
+import 'package:zebra_scanner_app/AsignacionCarrilListScreen.dart';
+import 'package:zebra_scanner_app/EvidenciaTraficoscreen.dart';
 import 'package:zebra_scanner_app/LogisticaListScreen.dart';
+import 'package:zebra_scanner_app/asociacion_tarima.dart';
 import 'package:zebra_scanner_app/logistics_review_screen.dart';
+import 'package:zebra_scanner_app/pallet_entry_tracking.dart';
+import 'package:zebra_scanner_app/revision_unidades_view.dart';
 import 'package:zebra_scanner_app/scanandcapture.dart';
 import 'package:zebra_scanner_app/dashboard_page.dart';
 import 'package:zebra_scanner_app/inventorygenpt.dart';
-import 'package:zebra_scanner_app/scanner_page.dart';
 import 'package:zebra_scanner_app/manage_pallet.dart';
 import 'package:zebra_scanner_app/scannermobileview.dart';
 import 'package:zebra_scanner_app/ubicacion_page.dart';
@@ -48,7 +52,7 @@ class ZebraScannerApp extends StatelessWidget {
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF004D40),
+            backgroundColor: const Color.fromRGBO(0, 77, 64, 1),
             foregroundColor: Colors.white,
             elevation: 2,
             shape: RoundedRectangleBorder(
@@ -87,12 +91,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // Lista de pantallas que requieren el escáner
   final Set<Type> _scannerScreens = {
-    ScannerPage,
     ManagePallet,
     UbicacionPage,
     InventoryGenPT,
     ScanAndCapture,
     LogisticaListScreen,
+    ScannerMobileView,
+    AsociacionTarima,
   };
 
   static final List<MenuOption> _menuOptions = [
@@ -102,29 +107,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       screen: DashboardPage(),
     ),
     MenuOption(
-      title: 'Escáner',
-      icon: Icons.qr_code_scanner,
-      screen: ScannerPage(),
-    ),
-    MenuOption(
-      title: 'Gestionar Tarima',
-      icon: Icons.archive,
-      screen: ManagePallet(),
-    ),
-    MenuOption(
-      title: 'Ubicación',
-      icon: Icons.map,
-      screen: UbicacionPage(),
-    ),
-    MenuOption(
-      title: 'Inventario PT',
-      icon: Icons.inventory,
-      screen: InventoryGenPT(),
-    ),
-    MenuOption(
-      title: 'Evidencias',
-      icon: Icons.photo_library,
-      screen: AduanaReviewScreen(),
+      title: 'Entrada de Tarimas',
+      icon: Icons.local_shipping,
+      screen: PalletEntryTracking(),
     ),
     MenuOption(
       title: 'Logísticas',
@@ -137,9 +122,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       screen: LogisticsReviewScreen(),
     ),
     MenuOption(
+      title: 'Evidencias',
+      icon: Icons.photo_library,
+      screen: AduanaReviewScreen(),
+    ),
+    MenuOption(
+      title: 'Asignar Carril',
+      icon: Icons.local_shipping,
+      screen: AsignacionCarrilListScreen(),
+    ),
+    MenuOption(
+      title: 'Entradas Manuales',
+      icon: Icons.assignment_turned_in,
+      screen: AsociacionTarima(),
+    ),
+    MenuOption(
+      title: 'Inventario PT',
+      icon: Icons.inventory,
+      screen: InventoryGenPT(),
+    ),
+    MenuOption(
       title: 'Scanner Mobile',
       icon: Icons.nfc, // O podrías usar Icons.qr_code_scanner o Icons.sensors
       screen: ScannerMobileView(),
+    ),
+    MenuOption(
+      title: 'Gestionar Tarima',
+      icon: Icons.archive,
+      screen: ManagePallet(),
+    ),
+    MenuOption(
+      title: 'Ubicación',
+      icon: Icons.map,
+      screen: UbicacionPage(),
+    ),
+    MenuOption(
+      title: 'Evidencias Tráfico',
+      icon: Icons.assignment_turned_in,
+      screen: EvidenciaTraficoView(),
+    ),
+    MenuOption(
+      title: 'Revisión de Unidades',
+      icon: Icons.local_shipping,
+      screen: RevisionUnidadesView(),
     ),
   ];
 
