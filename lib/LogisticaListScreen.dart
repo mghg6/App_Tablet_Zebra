@@ -106,8 +106,10 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
       final stopwatch = Stopwatch()..start();
 
+      // Cambio del endpoint para obtener solo logísticas en separación
       final response = await http
-          .get(Uri.parse('http://172.16.10.31/api/Logistica'))
+          .get(Uri.parse(
+              'http://172.16.10.31/api/Logistica/logisticas-separacion'))
           .timeout(Duration(seconds: 20), onTimeout: () {
         throw TimeoutException(
             'La solicitud ha excedido el tiempo de espera (15 segundos)');
@@ -307,7 +309,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     );
   }
 
-  // Método para confirmar separación - Versión actualizada con manejo de registros existentes
+  // Método para confirmar separación - Actualizado para usar PUT en lugar de POST
   Future<void> _confirmarSeparacion(dynamic logistica) async {
     // Reset the selected operator
     operadorSeleccionado = null;
@@ -402,32 +404,25 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
           },
         );
 
-        // Prepare the payload
-        final Map<String, dynamic> payload = {
-          "no_Logistica": logistica['nO_LOGISTICA'],
-          "cliente": logistica['cliente'],
-          "operador_Separador": selectedOperator,
-          "estatus": "En Separación de Material", // Siempre este estado inicial
-          "auxiliarVentas": logistica['auxVentas'],
-          "lastUpdate":
-              DateTime.now().toIso8601String() // Incluir la fecha actual
-        };
+        // Obtener el número de logística
+        final noLogistica = logistica['nO_LOGISTICA'];
 
-        // Log the payload for debugging
-        print("📦 Payload enviado a la API: ${jsonEncode(payload)}");
+        // Construir la URL con los parámetros de consulta
+        final now = DateTime.now();
+        final String formattedDate = now.toIso8601String();
+        final String estatus = "En Separación de Material";
 
-        // URL correcta de la API
-        final apiUrl = 'http://172.16.10.31/api/logistics_to_review';
+        // URL para la petición PUT
+        final apiUrl = Uri.parse(
+            'http://172.16.10.31/api/logistics_to_review/materialput/$noLogistica?estatus=$estatus&operador=$selectedOperator&lastUpdate=$formattedDate');
+
         print("🔗 URL de la petición: $apiUrl");
 
-        // Make API call
-        final response = await http
-            .post(
-              Uri.parse(apiUrl),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(payload),
-            )
-            .timeout(Duration(seconds: 15));
+        // Hacer la petición PUT
+        final response = await http.put(
+          apiUrl,
+          headers: {'Content-Type': 'application/json'},
+        ).timeout(Duration(seconds: 15));
 
         // Close loading indicator
         if (Navigator.canPop(context)) {
@@ -438,11 +433,11 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
         print(
             "📫 Respuesta del servidor (${response.statusCode}): ${response.body}");
 
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          // Registro creado exitosamente
+        if (response.statusCode == 200) {
+          // Registro actualizado exitosamente
           _procesarRespuestaExitosa(response, logistica, selectedOperator);
-        } else if (response.statusCode == 400 || response.statusCode == 409) {
-          // Posible registro duplicado o conflicto
+        } else if (response.statusCode == 409) {
+          // Registro existente o conflicto
           _manejarRegistroExistente(response, logistica, selectedOperator);
         } else {
           throw Exception(
@@ -458,8 +453,8 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text('Error al crear registro de separación: ${e.toString()}'),
+            content: Text(
+                'Error al actualizar registro de separación: ${e.toString()}'),
             backgroundColor: Colors.red,
             behavior: SnackBarBehavior.floating,
           ),
@@ -507,7 +502,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Registro de separación creado exitosamente'),
+          content: Text('Registro de separación actualizado exitosamente'),
           backgroundColor: Colors.green,
           behavior: SnackBarBehavior.floating,
         ),
@@ -540,7 +535,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-            'Advertencia: Registro creado, pero hubo error al procesar la respuesta'),
+            'Advertencia: Registro actualizado, pero hubo error al procesar la respuesta'),
         backgroundColor: Colors.orange,
         behavior: SnackBarBehavior.floating,
       ),
