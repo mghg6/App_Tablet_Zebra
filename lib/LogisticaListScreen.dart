@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -99,32 +102,76 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
   Future<void> _fetchLogisticas() async {
     try {
       setState(() => isLoading = true);
+      print('Iniciando petición a API: ${DateTime.now()}');
+
+      final stopwatch = Stopwatch()..start();
 
       final response = await http
           .get(Uri.parse('http://172.16.10.31/api/Logistica'))
-          .timeout(Duration(seconds: 15));
+          .timeout(Duration(seconds: 20), onTimeout: () {
+        throw TimeoutException(
+            'La solicitud ha excedido el tiempo de espera (15 segundos)');
+      });
+
+      print('Respuesta recibida en: ${stopwatch.elapsed.inMilliseconds}ms');
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          logisticas = data;
-          logisticasFiltradas = data;
-          _actualizarOpcionesFiltros();
-          errorMessage = null;
-          isLoading = false;
-        });
+        print('Código de respuesta: ${response.statusCode}');
+        print('Longitud de respuesta: ${response.body.length} bytes');
+
+        try {
+          final stopwatchDecode = Stopwatch()..start();
+          final data = json.decode(response.body);
+          print(
+              'JSON decodificado en: ${stopwatchDecode.elapsed.inMilliseconds}ms');
+          print('Número de registros recibidos: ${data.length}');
+
+          setState(() {
+            logisticas = data;
+            logisticasFiltradas = data;
+            _actualizarOpcionesFiltros();
+            errorMessage = null;
+            isLoading = false;
+          });
+        } catch (jsonError) {
+          print('Error al decodificar JSON: $jsonError');
+          throw Exception('Error al procesar la respuesta: $jsonError');
+        }
       } else {
+        print('Código de error: ${response.statusCode}');
+        print('Cuerpo de respuesta: ${response.body}');
         throw Exception('Error en la respuesta: ${response.statusCode}');
       }
+    } on TimeoutException catch (e) {
+      print('Error de timeout: $e');
+      if (!mounted) return;
+      setState(() {
+        errorMessage =
+            'La solicitud ha excedido el tiempo de espera. Comprueba tu conexión a la red.';
+        isLoading = false;
+      });
+      _showErrorSnackBar(errorMessage!);
+    } on SocketException catch (e) {
+      print('Error de conexión: $e');
+      if (!mounted) return;
+      setState(() {
+        errorMessage =
+            'No se pudo conectar al servidor. Verifica tu conexión de red.';
+        isLoading = false;
+      });
+      _showErrorSnackBar(errorMessage!);
     } catch (e) {
+      print('Error en _fetchLogisticas: $e');
       if (!mounted) return;
       setState(() {
         errorMessage = 'Error al cargar las logísticas: ${e.toString()}';
         isLoading = false;
       });
-      _showErrorSnackBar(e.toString());
+      _showErrorSnackBar(errorMessage!);
+    } finally {
+      print('Finalizada petición API: ${DateTime.now()}');
     }
   }
 
