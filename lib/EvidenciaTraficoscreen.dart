@@ -5,6 +5,48 @@ import 'package:http/http.dart' as http;
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 
+// Define a model class for the factura data
+class FacturaModel {
+  final int factura;
+  final int? noLogistica; // Mantiene nullabilidad
+
+  FacturaModel({
+    required this.factura,
+    this.noLogistica,
+  });
+
+  factory FacturaModel.fromJson(Map<String, dynamic> json) {
+    // Conversión segura para manejar posibles errores de tipos
+    int facturaValue;
+    try {
+      facturaValue = json['factura'] is int
+          ? json['factura']
+          : int.parse(json['factura'].toString());
+    } catch (e) {
+      print("Error convirtiendo factura: $e");
+      facturaValue = 0; // Valor predeterminado
+    }
+
+    // Manejo seguro del valor nullable
+    int? noLogisticaValue;
+    if (json['noLogistica'] != null) {
+      try {
+        noLogisticaValue = json['noLogistica'] is int
+            ? json['noLogistica']
+            : int.parse(json['noLogistica'].toString());
+      } catch (e) {
+        print("Error convirtiendo noLogistica: $e");
+        // Dejamos como null en caso de error
+      }
+    }
+
+    return FacturaModel(
+      factura: facturaValue,
+      noLogistica: noLogisticaValue,
+    );
+  }
+}
+
 class EvidenciaTraficoView extends StatefulWidget {
   const EvidenciaTraficoView({Key? key}) : super(key: key);
 
@@ -27,6 +69,12 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
   final List<File> _photoFiles = [];
   final List<String> _photoFilePaths = [];
 
+  // List to store facturas from API
+  List<FacturaModel> _facturas = [];
+  FacturaModel? _selectedFactura;
+  bool _isLoadingFacturas = false;
+  bool _hasFacturasError = false;
+
   // Image picker instance
   final ImagePicker _picker = ImagePicker();
 
@@ -42,6 +90,13 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
   static const Color baseColorBorder = Color.fromRGBO(0, 77, 64, 0.3);
 
   @override
+  void initState() {
+    super.initState();
+    // Fetch facturas when the view is initialized
+    _fetchFacturas();
+  }
+
+  @override
   void dispose() {
     _folioFacturaController.dispose();
     _noLogisticaController.dispose();
@@ -49,6 +104,81 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
     _comentariosController.dispose();
     _dispositivoController.dispose();
     super.dispose();
+  }
+
+  // Fetch facturas from the API
+  Future<void> _fetchFacturas() async {
+    setState(() {
+      _isLoadingFacturas = true;
+      _hasFacturasError = false;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse('http://172.16.10.31/api/FacturasList'),
+      );
+
+      if (response.statusCode == 200) {
+        try {
+          final List<dynamic> data = json.decode(response.body);
+
+          // Debugging: Imprimir la respuesta en consola para verificar
+          print("Respuesta API: ${response.body}");
+
+          setState(() {
+            _facturas = data.map((item) {
+              try {
+                return FacturaModel.fromJson(item);
+              } catch (e) {
+                // Registrar error específico por cada item
+                print("Error al convertir item: $item");
+                print("Error detallado: $e");
+                throw e; // Re-lanzar para ser capturado por el catch exterior
+              }
+            }).toList();
+            _isLoadingFacturas = false;
+          });
+        } catch (e) {
+          setState(() {
+            _isLoadingFacturas = false;
+            _hasFacturasError = true;
+          });
+          _showErrorSnackBar('Error al procesar facturas: $e');
+          print("Error completo: $e\nStackTrace: ${StackTrace.current}");
+        }
+      } else {
+        setState(() {
+          _isLoadingFacturas = false;
+          _hasFacturasError = true;
+        });
+        _showErrorSnackBar('Error al cargar facturas: ${response.statusCode}');
+      }
+    } catch (e) {
+      setState(() {
+        _isLoadingFacturas = false;
+        _hasFacturasError = true;
+      });
+      _showErrorSnackBar('Error al cargar facturas: $e');
+    }
+  }
+
+  // Handle factura selection
+  void _handleFacturaSelection(FacturaModel? factura) {
+    setState(() {
+      _selectedFactura = factura;
+      if (factura != null) {
+        _folioFacturaController.text = factura.factura.toString();
+        // Manejar caso donde noLogistica puede ser null
+        if (factura.noLogistica != null) {
+          _noLogisticaController.text = factura.noLogistica.toString();
+        } else {
+          _noLogisticaController.clear(); // Limpiar si es null
+        }
+      } else {
+        _folioFacturaController.clear();
+        _noLogisticaController.clear();
+      }
+    });
   }
 
   Future<void> _pickImage() async {
@@ -110,6 +240,11 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
       }
       if (_photoFiles.isEmpty) {
         _showErrorSnackBar('Debe agregar al menos una foto');
+        return;
+      }
+    } else {
+      if (_selectedFactura == null) {
+        _showErrorSnackBar('Debe seleccionar una factura');
         return;
       }
     }
@@ -187,12 +322,14 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
     var request = http.MultipartRequest('POST', Uri.parse(apiUrl));
 
     // Add text fields - exactamente como se ve en la API
-    if (_folioFacturaController.text.isNotEmpty) {
-      request.fields['FolioFactura'] = _folioFacturaController.text;
-    }
+    if (_selectedFactura != null) {
+      request.fields['FolioFactura'] = _selectedFactura!.factura.toString();
 
-    if (_noLogisticaController.text.isNotEmpty) {
-      request.fields['no_logistica'] = _noLogisticaController.text;
+      // Para no_logistica: usamos el valor del controller (que podría ser ingresado por el usuario)
+      // en lugar de usar directamente el valor del modelo que podría ser null
+      if (_noLogisticaController.text.isNotEmpty) {
+        request.fields['no_logistica'] = _noLogisticaController.text;
+      }
     }
 
     if (_responsableController.text.isNotEmpty) {
@@ -227,6 +364,8 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
   }
 
   void _clearForm() {
+    _selectedFactura = null;
+
     if (!_isAddingPhotosMode) {
       _folioFacturaController.clear();
       _noLogisticaController.clear();
@@ -457,21 +596,25 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
             // FolioFactura Field (always visible)
             _buildFieldLabel(
               'FolioFactura',
-              _isAddingPhotosMode ? '* requerido' : '',
+              '* requerido',
               Icons.format_list_numbered,
             ),
-            _buildTextField(
-              controller: _folioFacturaController,
-              hintText: 'Ingrese el número de folio factura',
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            ),
+
+            // Modified to use a dropdown instead of a text field for factura
+            _isAddingPhotosMode
+                ? _buildTextField(
+                    controller: _folioFacturaController,
+                    hintText: 'Ingrese el número de folio factura',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  )
+                : _buildFacturaDropdown(),
 
             // Remaining fields only visible in full form mode
             if (!_isAddingPhotosMode) ...[
               SizedBox(height: 16),
 
-              // no_logistica Field
+              // no_logistica Field (ahora editable si viene null en la factura)
               _buildFieldLabel(
                 'no_logistica',
                 '',
@@ -479,9 +622,12 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
               ),
               _buildTextField(
                 controller: _noLogisticaController,
-                hintText: 'Ingrese el número de logística',
+                hintText: _selectedFactura?.noLogistica == null
+                    ? 'Ingrese el número de logística'
+                    : 'Número de logística',
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                readOnly: false, // Ahora permitimos editar
               ),
 
               SizedBox(height: 16),
@@ -525,6 +671,106 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+
+  // New widget for the facturas dropdown - version simplificada
+  Widget _buildFacturaDropdown() {
+    if (_isLoadingFacturas) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(baseColor),
+              ),
+              SizedBox(height: 10),
+              Text(
+                'Cargando facturas...',
+                style: TextStyle(color: baseColor),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_hasFacturasError) {
+      return Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: baseColorLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Error al cargar facturas',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
+            TextButton(
+              onPressed: _fetchFacturas,
+              child: Text('Reintentar'),
+              style: TextButton.styleFrom(
+                foregroundColor: baseColor,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: baseColorLight,
+        borderRadius: BorderRadius.circular(12.0),
+        border: Border.all(color: baseColorBorder),
+      ),
+      padding: EdgeInsets.symmetric(horizontal: 12),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<FacturaModel>(
+          isExpanded: true,
+          hint: Text(
+            'Seleccione una factura',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 14,
+            ),
+          ),
+          value: _selectedFactura,
+          iconEnabledColor: baseColor,
+          style: TextStyle(
+            fontSize: 15,
+            color: Colors.grey[800],
+          ),
+          items: _facturas.map((FacturaModel factura) {
+            return DropdownMenuItem<FacturaModel>(
+              value: factura,
+              child: Text(
+                'Factura: ${factura.factura}',
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }).toList(),
+          onChanged: (FacturaModel? newValue) {
+            _handleFacturaSelection(newValue);
+          },
         ),
       ),
     );
@@ -614,8 +860,10 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
         ],
       ),
       child: ElevatedButton.icon(
-        onPressed:
-            _photoFiles.isEmpty && _isAddingPhotosMode ? null : _submitForm,
+        onPressed: (_photoFiles.isEmpty && _isAddingPhotosMode) ||
+                (!_isAddingPhotosMode && _selectedFactura == null)
+            ? null
+            : _submitForm,
         icon: Icon(_isAddingPhotosMode ? Icons.upload_file : Icons.save_alt),
         label: Text(
           _isAddingPhotosMode ? 'SUBIR FOTOS' : 'GUARDAR EVIDENCIA',
@@ -690,15 +938,17 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
     TextInputType keyboardType = TextInputType.text,
     List<TextInputFormatter>? inputFormatters,
     int maxLines = 1,
+    bool readOnly = false,
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: baseColorLight,
+        color: readOnly ? Colors.grey[100] : baseColorLight,
         borderRadius: BorderRadius.circular(12.0),
         border: Border.all(color: baseColorBorder),
       ),
       child: TextField(
         controller: controller,
+        readOnly: readOnly,
         decoration: InputDecoration(
           hintText: hintText,
           hintStyle: TextStyle(
