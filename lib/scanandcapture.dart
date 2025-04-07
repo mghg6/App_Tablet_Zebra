@@ -66,6 +66,12 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     'peso_bruto_correcto': false
   };
 
+  // NUEVO: Lista de EPCs originales para validación
+  List<String> originalEPCs = [];
+
+  // NUEVO: Mapa para rastreas qué EPCs ya han sido validados
+  Map<String, bool> validatedEPCs = {};
+
   final ImagePicker _imagePicker = ImagePicker();
 
   @override
@@ -80,6 +86,20 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     // Si tenemos trazabilidades, cargarlas
     if (widget.trazabilidadesList != null &&
         widget.trazabilidadesList!.isNotEmpty) {
+      // NUEVO: Inicializar la lista original de EPCs
+      originalEPCs =
+          List<String>.from(widget.trazabilidadesList!.map((trazabilidad) {
+        // Limpiar la trazabilidad quitando comillas y barras invertidas
+        final cleanTrazabilidad =
+            trazabilidad.replaceAll('"', '').replaceAll('\\', '');
+        return cleanTrazabilidad;
+      }));
+
+      // NUEVO: Inicializar el mapa de validación
+      for (String epc in originalEPCs) {
+        validatedEPCs[epc] = false;
+      }
+
       _loadInitialEPCs();
     }
 
@@ -161,6 +181,8 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                 'pesoNeto': data['pesoNeto']?.toString() ?? 'N/A',
                 'piezas': data['piezas']?.toString() ?? 'N/A',
                 'trazabilidad': data['trazabilidad'] ?? cleanTrazabilidad,
+                // NUEVO: Indica si está validado inicialmente como falso
+                'validated': false,
               });
             });
           }
@@ -176,6 +198,8 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                 'pesoNeto': 'N/A',
                 'piezas': 'N/A',
                 'trazabilidad': cleanTrazabilidad,
+                // NUEVO: Indica si está validado inicialmente como falso
+                'validated': false,
               });
             });
           }
@@ -253,8 +277,57 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     }
   }
 
+  // MODIFICADO: El método _processEPC ahora también valida los EPCs contra la lista original
   Future<void> _processEPC(String epc) async {
-    if (epcs.any((e) => e['epc'] == epc)) {
+    // Verificar si este EPC ya existe en la lista
+    bool isDuplicate = epcs.any((e) => e['epc'] == epc);
+
+    // Si ya existe en la lista y es de la lista original, solo lo marcamos como validado
+    bool existsInOriginal = false;
+    int existingIndex = -1;
+
+    // Buscar en la lista de EPCs actual si ya existe uno con trazabilidad que coincida con este EPC
+    for (int i = 0; i < epcs.length; i++) {
+      // Verificar si el EPC formateado coincide
+      if (epcs[i]['epc'] == epc) {
+        existingIndex = i;
+        break;
+      }
+
+      // O verificar si la trazabilidad coincide
+      String trazabilidad = epcs[i]['trazabilidad'].toString();
+      if (trazabilidad == epc || trazabilidad.padLeft(16, '0') == epc) {
+        existsInOriginal = true;
+        existingIndex = i;
+        break;
+      }
+    }
+
+    // Si es parte de la lista original, marcar como validado
+    if (existingIndex >= 0) {
+      if (!epcs[existingIndex]['validated']) {
+        setState(() {
+          epcs[existingIndex]['validated'] = true;
+
+          // Actualizar el mapa de validación para este EPC
+          String trazabilidad = epcs[existingIndex]['trazabilidad'].toString();
+          if (originalEPCs.contains(trazabilidad)) {
+            validatedEPCs[trazabilidad] = true;
+          }
+        });
+        _showSnackBar("✅ EPC validado correctamente");
+
+        // Mostrar resumen de validación
+        _showValidationProgress();
+        return;
+      } else {
+        _showSnackBar("⚠️ Este EPC ya fue validado anteriormente");
+        return;
+      }
+    }
+
+    // Si no está en la lista, lo procesamos como un nuevo EPC
+    if (isDuplicate) {
       if (mounted) _showSnackBar("EPC ya escaneado");
       return;
     }
@@ -266,6 +339,11 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
 
       if (response.statusCode == 200 && mounted) {
         final data = Map<String, dynamic>.from(jsonDecode(response.body));
+
+        // Obtener la trazabilidad para verificar si está en la lista original
+        String trazabilidad = data['trazabilidad'] ?? epc;
+        bool isInOriginalList = originalEPCs.contains(trazabilidad);
+
         setState(() {
           epcs.add({
             'epc': epc,
@@ -273,16 +351,39 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
             'nombreProducto': data['nombreProducto'] ?? 'N/A',
             'pesoNeto': data['pesoNeto']?.toString() ?? 'N/A',
             'piezas': data['piezas']?.toString() ?? 'N/A',
-            'trazabilidad': data['trazabilidad'] ?? 'N/A',
+            'trazabilidad': trazabilidad,
+            // Si está en la lista original, lo marcamos como validado
+            'validated': isInOriginalList,
           });
+
+          // Si está en la lista original, actualizamos el mapa de validación
+          if (isInOriginalList) {
+            validatedEPCs[trazabilidad] = true;
+            _showSnackBar("✅ EPC validado correctamente");
+            _showValidationProgress();
+          } else {
+            _showSnackBar("⚠️ EPC procesado (no estaba en la lista original)");
+          }
         });
-        _showSnackBar("EPC procesado correctamente");
       } else {
         throw HttpException('Error en la respuesta del servidor');
       }
     } catch (e) {
       if (mounted) _showSnackBar("Error al procesar EPC: $e");
     }
+  }
+
+  // NUEVO: Muestra el progreso de validación
+  void _showValidationProgress() {
+    if (originalEPCs.isEmpty) return;
+
+    int validatedCount = validatedEPCs.values.where((v) => v).length;
+    int totalCount = originalEPCs.length;
+
+    double percentage = (validatedCount / totalCount) * 100;
+
+    _showSnackBar(
+        "Progreso de validación: $validatedCount de $totalCount EPCs (${percentage.toStringAsFixed(0)}%)");
   }
 
   // Image handling methods
@@ -566,6 +667,10 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           observacionesController.clear();
           documentacionController.clear();
 
+          // NUEVO: Limpiar mapas de validación
+          validatedEPCs.clear();
+          originalEPCs.clear();
+
           // Restablecer checklist de aduana
           aduanaChecklist.forEach((key, value) {
             aduanaChecklist[key] = false;
@@ -595,7 +700,8 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
         xl.TextCellValue('Peso Neto'),
         xl.TextCellValue('Clave Producto'),
         xl.TextCellValue('Piezas'),
-        xl.TextCellValue('Trazabilidad')
+        xl.TextCellValue('Trazabilidad'),
+        xl.TextCellValue('Validado') // NUEVO: Columna para estado de validación
       ]);
 
       for (var epc in epcs) {
@@ -605,7 +711,10 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
           xl.TextCellValue(epc['nombreProducto'].toString()),
           xl.TextCellValue(epc['pesoNeto'].toString()),
           xl.TextCellValue(epc['piezas'].toString()),
-          xl.TextCellValue(epc['trazabilidad'].toString())
+          xl.TextCellValue(epc['trazabilidad'].toString()),
+          xl.TextCellValue(epc['validated'] == true
+              ? 'Sí'
+              : 'No') // NUEVO: Estado de validación
         ]);
       }
 
@@ -754,6 +863,20 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 Text("EPCs escaneados: ${epcs.length}",
                     style: TextStyle(fontWeight: FontWeight.bold)),
+
+                // NUEVO: Mostrar resumen de validación si hay EPCs originales
+                if (originalEPCs.isNotEmpty) ...[
+                  SizedBox(height: 8),
+                  Text(
+                    "EPCs Validados: ${validatedEPCs.values.where((v) => v).length} de ${originalEPCs.length}",
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: validatedEPCs.values.every((v) => v)
+                            ? Colors.green
+                            : Colors.orange),
+                  ),
+                ],
+
                 SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -811,6 +934,12 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                     _showSnackBar("Todas las fotos eliminadas");
                   } else {
                     epcs.clear();
+                    // NUEVO: Reiniciar estado de validación
+                    if (originalEPCs.isNotEmpty) {
+                      for (String epc in originalEPCs) {
+                        validatedEPCs[epc] = false;
+                      }
+                    }
                     _showSnackBar("Todos los EPCs eliminados");
                   }
                 });
@@ -853,11 +982,47 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     );
   }
 
+  // MODIFICADO: Ahora el EPC card muestra el estado de validación
   Widget _buildEPCCard(Map<String, dynamic> epc, int index) {
+    // Determinar si este EPC está en la lista original
+    bool isInOriginalList = false;
+    String trazabilidad = epc['trazabilidad'].toString();
+
+    if (originalEPCs.contains(trazabilidad)) {
+      isInOriginalList = true;
+    }
+
+    // Estado de validación
+    bool isValidated = epc['validated'] ?? false;
+
+    // Color basado en validación
+    Color cardColor = Colors.white;
+    Color textColor = Colors.black;
+
+    if (isInOriginalList) {
+      if (isValidated) {
+        // Verde para validado
+        cardColor = Colors.green.shade50;
+        textColor = Colors.green.shade800;
+      } else {
+        // Amarillo para pendiente
+        cardColor = Colors.amber.shade50;
+        textColor = Colors.amber.shade800;
+      }
+    }
+
+    // Ícono de validación
+    Widget validationIcon = isValidated
+        ? Icon(Icons.check_circle, color: Colors.green, size: 24)
+        : isInOriginalList
+            ? Icon(Icons.pending_outlined, color: Colors.amber, size: 24)
+            : Icon(Icons.new_releases_outlined, color: Colors.grey, size: 24);
+
     return Card(
       margin: EdgeInsets.only(bottom: 8),
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardColor,
       child: Padding(
         padding: EdgeInsets.all(12),
         child: Row(
@@ -882,21 +1047,67 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("EPC: ${epc['epc']}",
-                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          "EPC: ${epc['epc']}",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: textColor,
+                          ),
+                        ),
+                      ),
+                      validationIcon, // Ícono de validación
+                    ],
+                  ),
                   SizedBox(height: 4),
                   Text("Clave Producto: ${epc['claveProducto']}"),
                   Text("Producto: ${epc['nombreProducto']}"),
                   Text("Peso: ${epc['pesoNeto']} kg"),
                   Text("Piezas: ${epc['piezas']}"),
-                  Text("Trazabilidad: ${epc['trazabilidad']}"),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text("Trazabilidad: ${epc['trazabilidad']}"),
+                      ),
+                      // Status text
+                      if (isInOriginalList)
+                        Container(
+                          padding:
+                              EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isValidated
+                                ? Colors.green.shade100
+                                : Colors.amber.shade100,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            isValidated ? "Validado" : "Pendiente",
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isValidated
+                                  ? Colors.green.shade800
+                                  : Colors.amber.shade800,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
             IconButton(
               icon: Icon(Icons.delete_outline, color: Colors.red),
               onPressed: () {
-                setState(() => epcs.removeAt(index));
+                setState(() {
+                  // Actualizar estado de validación si es necesario
+                  if (isInOriginalList && isValidated) {
+                    validatedEPCs[trazabilidad] = false;
+                  }
+                  epcs.removeAt(index);
+                });
                 _showSnackBar("EPC eliminado");
               },
             ),
@@ -1019,6 +1230,28 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                   style: TextStyle(color: Colors.blue.shade800),
                 ),
               ),
+
+            // NUEVO: Indicador de progreso de validación si hay EPCs originales
+            if (originalEPCs.isNotEmpty)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                margin: EdgeInsets.only(right: 10),
+                decoration: BoxDecoration(
+                  color: validatedEPCs.values.every((v) => v)
+                      ? Colors.green.shade100
+                      : Colors.amber.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  "${validatedEPCs.values.where((v) => v).length}/${originalEPCs.length}",
+                  style: TextStyle(
+                    color: validatedEPCs.values.every((v) => v)
+                        ? Colors.green.shade800
+                        : Colors.amber.shade800,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
           ],
         ),
         resizeToAvoidBottomInset: true,
@@ -1061,6 +1294,52 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
                             ),
                           ),
                         ),
+
+                      // NUEVO: Mostrar barra de progreso de validación si hay EPCs originales
+                      if (originalEPCs.isNotEmpty)
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    "Progreso de validación:",
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  Text(
+                                    "${validatedEPCs.values.where((v) => v).length} de ${originalEPCs.length} EPCs",
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 4),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: LinearProgressIndicator(
+                                  value: originalEPCs.isEmpty
+                                      ? 0.0
+                                      : validatedEPCs.values
+                                              .where((v) => v)
+                                              .length /
+                                          originalEPCs.length,
+                                  backgroundColor: Colors.grey.shade200,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.green),
+                                  minHeight: 10,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
                       _buildEPCsList(),
                       _buildImageGallery(),
                     ],
@@ -1090,6 +1369,52 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // NUEVO: Banner de validación si hay EPCs originales
+          if (originalEPCs.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+              decoration: BoxDecoration(
+                color: validatedEPCs.values.every((v) => v)
+                    ? Colors.green.shade50
+                    : Colors.amber.shade50,
+                border: Border.all(
+                  color: validatedEPCs.values.every((v) => v)
+                      ? Colors.green.shade200
+                      : Colors.amber.shade200,
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    validatedEPCs.values.every((v) => v)
+                        ? Icons.check_circle
+                        : Icons.info_outline,
+                    color: validatedEPCs.values.every((v) => v)
+                        ? Colors.green
+                        : Colors.amber.shade800,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      validatedEPCs.values.every((v) => v)
+                          ? "Todos los EPCs han sido validados"
+                          : "Escanee los ${originalEPCs.length - validatedEPCs.values.where((v) => v).length} EPCs restantes para validar",
+                      style: TextStyle(
+                        color: validatedEPCs.values.every((v) => v)
+                            ? Colors.green.shade800
+                            : Colors.amber.shade800,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 12),
+          ],
+
           Row(
             children: [
               Expanded(
@@ -1112,6 +1437,16 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
             children: [
               _buildCounter("EPCs", epcs.length, Icons.list_alt),
               _buildCounter("Fotos", images.length, Icons.photo_library),
+
+              // NUEVO: Contador de validación si hay EPCs originales
+              if (originalEPCs.isNotEmpty)
+                _buildCounter(
+                    "Validados",
+                    validatedEPCs.values.where((v) => v).length,
+                    Icons.verified_outlined,
+                    validatedEPCs.values.every((v) => v)
+                        ? Colors.green
+                        : Color(0xFF46707E)),
             ],
           ),
         ],
@@ -1119,22 +1454,24 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
     );
   }
 
-  Widget _buildCounter(String label, int count, IconData icon) {
+  // MODIFICADO: Añadida opción de color personalizado
+  Widget _buildCounter(String label, int count, IconData icon, [Color? color]) {
+    final baseColor = color ?? Color(0xFF46707E);
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Color(0xFF46707E).withOpacity(0.1),
+        color: baseColor.withOpacity(0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 20, color: Color(0xFF46707E)),
+          Icon(icon, size: 20, color: baseColor),
           SizedBox(width: 8),
           Text(
             "$label: $count",
             style: TextStyle(
-              color: Color(0xFF46707E),
+              color: baseColor,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -1149,12 +1486,57 @@ class _ScanAndCaptureState extends State<ScanAndCapture>
       child: epcs.isEmpty
           ? _buildEmptyState("No hay EPCs escaneados", Icons.qr_code)
           : Column(
-              children: epcs
-                  .asMap()
-                  .entries
-                  .map((entry) => _buildEPCCard(entry.value, entry.key))
-                  .toList(),
+              children: [
+                // NUEVO: Si hay originales, mostrar leyenda
+                if (originalEPCs.isNotEmpty) ...[
+                  Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        _buildLegendItem(Colors.green.shade50, "Validado"),
+                        SizedBox(width: 16),
+                        _buildLegendItem(Colors.amber.shade50, "Pendiente"),
+                        SizedBox(width: 16),
+                        _buildLegendItem(Colors.white, "Adicional"),
+                      ],
+                    ),
+                  ),
+                  Divider(),
+                ],
+
+                // Lista de EPCs
+                ...epcs
+                    .asMap()
+                    .entries
+                    .map((entry) => _buildEPCCard(entry.value, entry.key))
+                    .toList(),
+              ],
             ),
+    );
+  }
+
+  // NUEVO: Widget para la leyenda
+  Widget _buildLegendItem(Color color, String label) {
+    return Row(
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color,
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade700,
+          ),
+        ),
+      ],
     );
   }
 
