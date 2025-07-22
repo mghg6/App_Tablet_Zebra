@@ -15,7 +15,7 @@ import 'package:zebra_scanner_app/manage_pallet.dart';
 import 'package:zebra_scanner_app/scannermobileview.dart';
 import 'package:zebra_scanner_app/ubicacion_page.dart';
 import 'package:zebra_scanner_app/loading_screen.dart';
-
+  
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([

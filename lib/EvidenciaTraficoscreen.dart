@@ -8,11 +8,11 @@ import 'package:image_picker/image_picker.dart';
 // Define a model class for the factura data
 class FacturaModel {
   final int factura;
-  final int? noLogistica; // Mantiene nullabilidad
+  final String? cliente; // Mantiene nullabilidad
 
   FacturaModel({
     required this.factura,
-    this.noLogistica,
+    this.cliente,
   });
 
   factory FacturaModel.fromJson(Map<String, dynamic> json) {
@@ -28,21 +28,19 @@ class FacturaModel {
     }
 
     // Manejo seguro del valor nullable
-    int? noLogisticaValue;
-    if (json['noLogistica'] != null) {
+    String? clienteValue;
+    if (json['cliente'] != null) {
       try {
-        noLogisticaValue = json['noLogistica'] is int
-            ? json['noLogistica']
-            : int.parse(json['noLogistica'].toString());
+        clienteValue = json['cliente'].toString();
       } catch (e) {
-        print("Error convirtiendo noLogistica: $e");
+        print("Error convirtiendo cliente: $e");
         // Dejamos como null en caso de error
       }
-    }
+}
 
     return FacturaModel(
       factura: facturaValue,
-      noLogistica: noLogisticaValue,
+      cliente: clienteValue,
     );
   }
 }
@@ -60,10 +58,10 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
 
   // Controllers for text fields
   final _folioFacturaController = TextEditingController();
-  final _noLogisticaController = TextEditingController();
+  final _clienteController = TextEditingController();
   final _responsableController = TextEditingController();
   final _comentariosController = TextEditingController();
-  final _dispositivoController = TextEditingController();
+  //final _dispositivoController = TextEditingController();
 
   // List to store photos
   final List<File> _photoFiles = [];
@@ -99,10 +97,10 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
   @override
   void dispose() {
     _folioFacturaController.dispose();
-    _noLogisticaController.dispose();
+    _clienteController.dispose();
     _responsableController.dispose();
     _comentariosController.dispose();
-    _dispositivoController.dispose();
+    //_dispositivoController.dispose();
     super.dispose();
   }
 
@@ -169,14 +167,14 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
       if (factura != null) {
         _folioFacturaController.text = factura.factura.toString();
         // Manejar caso donde noLogistica puede ser null
-        if (factura.noLogistica != null) {
-          _noLogisticaController.text = factura.noLogistica.toString();
+        if (factura.cliente != null) {
+          _clienteController.text = factura.cliente.toString();
         } else {
-          _noLogisticaController.clear(); // Limpiar si es null
+          _clienteController.clear();
         }
       } else {
         _folioFacturaController.clear();
-        _noLogisticaController.clear();
+        _clienteController.clear();
       }
     });
   }
@@ -327,9 +325,9 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
 
       // Para no_logistica: usamos el valor del controller (que podría ser ingresado por el usuario)
       // en lugar de usar directamente el valor del modelo que podría ser null
-      if (_noLogisticaController.text.isNotEmpty) {
-        request.fields['no_logistica'] = _noLogisticaController.text;
-      }
+      if (_clienteController.text.isNotEmpty) {
+  request.fields['cliente'] = _clienteController.text;
+}
     }
 
     if (_responsableController.text.isNotEmpty) {
@@ -340,9 +338,12 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
       request.fields['Comentarios'] = _comentariosController.text;
     }
 
-    if (_dispositivoController.text.isNotEmpty) {
-      request.fields['Dispositivo'] = _dispositivoController.text;
-    }
+    // if (_dispositivoController.text.isNotEmpty) {
+    //   request.fields['Dispositivo'] = _dispositivoController.text;
+    // }
+    
+    // Siempre enviar un valor fijo para Dispositivo
+    request.fields['Dispositivo'] = "RFID-Scanner"; // O cualquier valor fijo que desees
 
     // Add all photo files
     if (_photoFiles.isNotEmpty) {
@@ -368,10 +369,10 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
 
     if (!_isAddingPhotosMode) {
       _folioFacturaController.clear();
-      _noLogisticaController.clear();
+      _clienteController.clear();
       _responsableController.clear();
       _comentariosController.clear();
-      _dispositivoController.clear();
+      //_dispositivoController.clear();
     } else {
       // In add photos mode, only clear photos
       _folioFacturaController.clear();
@@ -616,18 +617,18 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
 
               // no_logistica Field (ahora editable si viene null en la factura)
               _buildFieldLabel(
-                'no_logistica',
+                'Cliente',
                 '',
                 Icons.local_shipping,
               ),
               _buildTextField(
-                controller: _noLogisticaController,
-                hintText: _selectedFactura?.noLogistica == null
-                    ? 'Ingrese el número de logística'
-                    : 'Número de logística',
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                readOnly: false, // Ahora permitimos editar
+                controller: _clienteController,
+                hintText: _selectedFactura?.cliente == null
+                    ? 'Ingrese el nombre del cliente'
+                    : 'Nombre del cliente',
+                keyboardType: TextInputType.text, // Changed from number to text
+                inputFormatters: [], // Remove FilteringTextInputFormatter.digitsOnly
+                readOnly: false,
               ),
 
               SizedBox(height: 16),
@@ -660,15 +661,15 @@ class _EvidenciaTraficoViewState extends State<EvidenciaTraficoView> {
               SizedBox(height: 16),
 
               // Dispositivo Field
-              _buildFieldLabel(
-                'Dispositivo',
-                '',
-                Icons.devices,
-              ),
-              _buildTextField(
-                controller: _dispositivoController,
-                hintText: 'Nombre o ID del dispositivo',
-              ),
+              // _buildFieldLabel(
+              //   'Dispositivo',
+              //   '',
+              //   Icons.devices,
+              // ),
+              // _buildTextField(
+              //   controller: _dispositivoController,
+              //   hintText: 'Nombre o ID del dispositivo',
+              // ),
             ],
           ],
         ),

@@ -1,0 +1,20 @@
+{
+  "buildFiles": [
+    "C:\\Users\\Sistemas\\Flutter\\flutter\\packages\\flutter_tools\\gradle\\src\\main\\groovy\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "C:\\Users\\Sistemas\\AppData\\Local\\Android\\sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "C:\\Users\\Sistemas\\Desktop\\BFX\\TABLET\\zebra_scanner_app\\android\\app\\.cxx\\Debug\\6j705339\\x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "C:\\Users\\Sistemas\\AppData\\Local\\Android\\sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "C:\\Users\\Sistemas\\Desktop\\BFX\\TABLET\\zebra_scanner_app\\android\\app\\.cxx\\Debug\\6j705339\\x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {}
+}

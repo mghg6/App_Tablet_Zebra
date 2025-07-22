@@ -1,0 +1,2 @@
+C:/Users/Sistemas/Desktop/BFX/TABLET/zebra_scanner_app/android/app/.cxx/RelWithDebInfo/6j3u4l2c/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/Sistemas/Desktop/BFX/TABLET/zebra_scanner_app/android/app/.cxx/RelWithDebInfo/6j3u4l2c/x86_64/CMakeFiles/rebuild_cache.dir

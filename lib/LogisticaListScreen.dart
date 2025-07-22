@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:zebra_scanner_app/LogisticaDetailScreen.dart'; // You'll need to create this file
+import 'package:zebra_scanner_app/LogisticaDetailScreen.dart';
 
 class LogisticaListScreen extends StatefulWidget {
   const LogisticaListScreen({Key? key}) : super(key: key);
@@ -42,7 +42,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
   // Lista de operadores
   final List<String> operadores = [
-    'Jorge Lara Pachecho',
+    'Jorge Lara Pacheco',
     'Luis Manuel Rodriguez Zacarias',
     'Adrian Chavez Marquez',
     'Luis Adrian Segura Aguilar',
@@ -62,6 +62,9 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     'AZUL': Colors.blue,
     'AMARILLO': Color.fromARGB(255, 239, 170, 0),
   };
+
+  // Map para cachear las unidades ya consultadas
+  Map<String, String> _unidadesCacheadas = {};
 
   @override
   void initState() {
@@ -106,10 +109,10 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
       final stopwatch = Stopwatch()..start();
 
-      // Cambio del endpoint para obtener solo logísticas en separación
+      // Endpoint actualizado para obtener logísticas en separación
       final response = await http
           .get(Uri.parse(
-              'http://172.16.10.31/api/Logistica/logisticas-separacion'))
+              'http://172.16.10.31/api/Logistica/logisticas-separacion-prueba'))
           .timeout(Duration(seconds: 20), onTimeout: () {
         throw TimeoutException(
             'La solicitud ha excedido el tiempo de espera (15 segundos)');
@@ -130,9 +133,35 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
               'JSON decodificado en: ${stopwatchDecode.elapsed.inMilliseconds}ms');
           print('Número de registros recibidos: ${data.length}');
 
+          // Procesamos el nuevo formato JSON, que ahora tiene clientes anidados
+          List<dynamic> logisticasProcesadas = [];
+
+          for (var logistica in data) {
+            if (logistica.containsKey('clientes') && logistica['clientes'] is List && logistica['clientes'].isNotEmpty) {
+              for (var clienteInfo in logistica['clientes']) {
+                // Crear una nueva logística para cada cliente
+                var nuevaLogistica = Map<String, dynamic>.from(logistica);
+                
+                // Eliminar la lista de clientes para evitar duplicados
+                nuevaLogistica.remove('clientes');
+                
+                // Agregar información del cliente
+                nuevaLogistica['cliente'] = clienteInfo['cliente'];
+                
+                // Agregar detalles del cliente
+                nuevaLogistica['detalles'] = clienteInfo['detalles'];
+                
+                logisticasProcesadas.add(nuevaLogistica);
+              }
+            } else {
+              // Si no tiene la estructura nueva, mantener la logística como está
+              logisticasProcesadas.add(logistica);
+            }
+          }
+
           setState(() {
-            logisticas = data;
-            logisticasFiltradas = data;
+            logisticas = logisticasProcesadas;
+            logisticasFiltradas = logisticasProcesadas;
             _actualizarOpcionesFiltros();
             errorMessage = null;
             isLoading = false;
@@ -200,6 +229,9 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
         if (detalle['estatus2'] != null) {
           estatusOpciones.add(detalle['estatus2'].toString());
         }
+        if (detalle['estatus'] != null) {
+          estatusOpciones.add(detalle['estatus'].toString());
+        }
         if (detalle['dias'] != null) {
           diasOpciones.add(detalle['dias'].toString());
         }
@@ -246,7 +278,8 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
           // Comprobar si coincide con algún estatus en los detalles
           List<dynamic> detalles = logistica['detalles'] ?? [];
           bool coincideEstatusDetalles = detalles.any((detalle) =>
-              detalle['estatus2']?.toString() == estatusSeleccionado);
+              detalle['estatus2']?.toString() == estatusSeleccionado ||
+              detalle['estatus']?.toString() == estatusSeleccionado);
 
           cumpleFiltros = cumpleFiltros &&
               (coincideEstatusGeneral || coincideEstatusDetalles);
@@ -309,7 +342,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     );
   }
 
-  // Método para confirmar separación - Actualizado para usar PUT en lugar de POST
+  // Método para confirmar separación
   Future<void> _confirmarSeparacion(dynamic logistica) async {
     // Reset the selected operator
     operadorSeleccionado = null;
@@ -714,7 +747,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
 
   // Método para navegar a la pantalla de detalle
   void _navegarALogisticaDetail(
-      dynamic logistica, String operador, int separacionId, int revisionId) {
+    dynamic logistica, String operador, int separacionId, int revisionId) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -773,6 +806,49 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     return Colors.grey.shade700;
   }
 
+  // Método para obtener la unidad de medida desde el endpoint
+  Future<String> _obtenerUnidadMedida(String itemCode) async {
+    try {
+      final response = await http
+          .get(Uri.parse('http://172.16.10.31/api/Product/claveUnidad?claveProducto=$itemCode'))
+          .timeout(Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        // Parsear la respuesta
+        String unidad = response.body.trim();
+        
+        // Convertir "MIL" a "Millares" si la respuesta contiene "MIL"
+        if (unidad.toUpperCase() == "MIL") {
+          return "Millares";
+        }
+        
+        return unidad;
+      } else {
+        print('Error al obtener unidad: ${response.statusCode}');
+        return "N/A";
+      }
+    } catch (e) {
+      print('Error en solicitud de unidad: $e');
+      return "N/A";
+    }
+  }
+
+  // Método para obtener el comentario de la logística
+  String _obtenerComentario(dynamic logistica) {
+    // Verificar si existe comentario en el nuevo formato
+    if (logistica.containsKey('comentario') && logistica['comentario'] != null) {
+      String comentario = logistica['comentario'].toString();
+      // Si el comentario es "Sin Comentarios", tratarlo como vacío
+      if (comentario == "Sin Comentarios") {
+        return "";
+      }
+      return comentario;
+    }
+    
+    // Si no hay comentario o es nulo, devolver cadena vacía
+    return "";
+  }
+
   Widget _buildLogisticaCard(dynamic logistica) {
     List<dynamic> detalles = logistica['detalles'] ?? [];
     // Color base del diseño
@@ -781,285 +857,739 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
     // Estatus de la logística
     String estatus = logistica['estatus'] ?? 'Sin Estatus';
 
+    // Obtener comentario de la logística (nuevo campo)
+    String comentario = _obtenerComentario(logistica);
+
     // Determinar el color del estatus basado en su valor
     Color estatusColor = _getEstatusColor(estatus);
+    
+    // Información para el primer producto (seguirá mostrándose en la vista principal)
+    String itemCode = "";
+    String producto = "";
+    String productoCompleto = "";
+    String cantidadProgramada = "";
+    String numeroPedido = "";
+    String unidad = "N/A";
+    
+    if (detalles.isNotEmpty) {
+      var primerDetalle = detalles[0];
+      itemCode = _safeToString(primerDetalle['itemCode']);
+      producto = _safeToString(primerDetalle['producto']);
+      productoCompleto = itemCode + " - " + producto;
+      cantidadProgramada = _safeToString(primerDetalle['programado']);
+      numeroPedido = _safeToString(primerDetalle['pedido']);
+      unidad = _safeToString(primerDetalle['unidad']);
+      
+      // Verificar si ya tenemos la unidad cacheada
+      if (!_unidadesCacheadas.containsKey(itemCode)) {
+        // Si no está cacheada, iniciar la consulta asíncrona para obtenerla
+        _obtenerUnidadMedida(itemCode).then((value) {
+          if (mounted) {
+            setState(() {
+              _unidadesCacheadas[itemCode] = value;
+            });
+          }
+        });
+      }
+      
+      // Usar la unidad cacheada si existe, de lo contrario usar la del detalle o "Consultando..."
+      unidad = _unidadesCacheadas[itemCode] ?? 
+               (primerDetalle['unidad'] != null ? _safeToString(primerDetalle['unidad']) : "Consultando...");
+    }
 
     return Container(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: EdgeInsets.symmetric(horizontal: 12, vertical: 16), // Margen horizontal reducido, vertical aumentado
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            baseColor.withOpacity(0.1),
+            baseColor.withOpacity(0.2), // Más opaco
             Colors.white,
           ],
+          stops: [0.1, 0.9], // Ajustar el gradiente
         ),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18), // Radio más grande
         boxShadow: [
           BoxShadow(
-            color: baseColor.withOpacity(0.1),
-            spreadRadius: 1,
-            blurRadius: 10,
-            offset: Offset(0, 2),
+            color: baseColor.withOpacity(0.4), // Sombra más visible
+            spreadRadius: 2,
+            blurRadius: 15, // Más difuminado
+            offset: Offset(0, 4), // Mayor desplazamiento
           ),
         ],
-        border: Border.all(
-          color: baseColor.withOpacity(0.1),
-          width: 1,
-        ),
       ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
+      child: Container(
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          onTap: () {
-            // Show action bottom sheet
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              useSafeArea: true,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-              ),
-              builder: (BuildContext context) {
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(context).viewInsets.bottom,
+          border: Border.all(
+            color: baseColor, // Color principal
+            width: 8.0, // Borde mucho más grueso
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.white, // Borde interno blanco para efecto de doble borde
+              width: 2,
+            ),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                // Show action bottom sheet
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
                   ),
-                  child: Container(
-                    padding: EdgeInsets.only(
-                      top: 20,
-                      left: 20,
-                      right: 20,
-                      bottom: 20 +
-                          MediaQuery.of(context)
-                              .padding
-                              .bottom, // Padding adicional para el área segura
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                  builder: (BuildContext context) {
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: MediaQuery.of(context).viewInsets.bottom,
+                      ),
+                      child: Container(
+                        padding: EdgeInsets.only(
+                          top: 20,
+                          left: 20,
+                          right: 20,
+                          bottom: 20 +
+                              MediaQuery.of(context)
+                                  .padding
+                                  .bottom, // Padding adicional para el área segura
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Acciones para Logística #${_safeToString(logistica['nO_LOGISTICA'])}',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey[800],
+                              ),
+                            ),
+                            SizedBox(height: 20),
+                            ListTile(
+                              leading: Icon(Icons.assignment, color: baseColor),
+                              title: Text('Iniciar Separación de Material'),
+                              onTap: () {
+                                Navigator.pop(context); // Close bottom sheet
+                                _confirmarSeparacion(logistica);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header modificado para incluir estatus
+                    Row(
                       children: [
-                        Text(
-                          'Acciones para Logística #${_safeToString(logistica['nO_LOGISTICA'])}',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
+                        Container(
+                          padding: EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: baseColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: baseColor,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.local_shipping,
+                            color: baseColor,
+                            size: 24,
                           ),
                         ),
-                        SizedBox(height: 20),
-                        ListTile(
-                          leading: Icon(Icons.assignment, color: baseColor),
-                          title: Text('Iniciar Separación de Material'),
-                          onTap: () {
-                            Navigator.pop(context); // Close bottom sheet
-                            _confirmarSeparacion(logistica);
-                          },
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '#${_safeToString(logistica['nO_LOGISTICA'])}',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+                                ),
+                              ),
+                              Text(
+                                'Logística',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: baseColor,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Estatus Badge - Se añade a la derecha con texto blanco
+                        Container(
+                          padding:
+                              EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: estatusColor,
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [
+                              BoxShadow(
+                                color: estatusColor.withOpacity(0.3),
+                                spreadRadius: 0,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            estatus,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                );
-              },
-            );
-          },
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header modificado para incluir estatus
-                Row(
-                  children: [
+                    SizedBox(height: 16),
+                    // Información Principal
                     Container(
-                      padding: EdgeInsets.all(10),
+                      padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: baseColor.withOpacity(0.1),
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: baseColor.withOpacity(0.2),
-                          width: 1,
+                          color: Colors.grey[300]!,
+                          width: 1.5,
                         ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            spreadRadius: 1,
+                            blurRadius: 5,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      child: Icon(
-                        Icons.local_shipping,
-                        color: baseColor,
-                        size: 24,
-                      ),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            '#${_safeToString(logistica['nO_LOGISTICA'])}',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey[800],
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Primera columna - Cliente
+                              Expanded(
+                                child: _buildColumnInfoItem(
+                                  Icons.business,
+                                  'Cliente',
+                                  _safeToString(logistica['cliente']),
+                                  Colors.indigo, // Color principal para Cliente
+                                ),
+                              ),
+                              // Separador vertical
+                              VerticalDivider(
+                                color: Colors.grey[200],
+                                width: 20,
+                              ),
+                              // Segunda columna - Aux Ventas
+                              Expanded(
+                                child: _buildColumnInfoItem(
+                                  Icons.person_outline,
+                                  'Aux Ventas',
+                                  _safeToString(logistica['auxVentas']),
+                                  Colors.teal, // Color principal para Aux Ventas
+                                ),
+                              ),
+                              // Separador vertical
+                              VerticalDivider(
+                                color: Colors.grey[200],
+                                width: 20,
+                              ),
+                              // Tercera columna - Programado
+                              Expanded(
+                                child: _buildColumnInfoItem(
+                                  Icons.calendar_today_outlined,
+                                  'Programado',
+                                  logistica['fechaProg']?.toString().split(' ')[0] ??
+                                      'N/A',
+                                  Colors.deepPurple, // Color principal para Programado
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          // Mostrar comentario siempre, pero si está vacío mostrar "Sin comentarios"
+                          SizedBox(height: 12),
+                          Divider(height: 1, color: Colors.grey[200]),
+                          SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color.fromARGB(255, 236, 217, 159).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: const Color.fromARGB(255, 237, 186, 45),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.comment_outlined,
+                                      size: 16,
+                                      color: Colors.amber[800],
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Comentario:',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber[800],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 6),
+                                Text(
+                                  comentario.isEmpty ? "Sin comentarios" : comentario,
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    color: Colors.grey[800],
+                                    fontStyle: comentario.isEmpty ? FontStyle.italic : FontStyle.normal,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          Text(
-                            'Logística',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: baseColor,
-                              fontWeight: FontWeight.w500,
+                          
+                          // Sección de productos resumida
+                          SizedBox(height: 12),
+                          Divider(height: 1, color: Colors.grey[200]),
+                          SizedBox(height: 12),
+                          
+                          // Indicador de cantidad de productos
+                          Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: baseColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: baseColor.withOpacity(0.3),
+                                width: 1,
+                              ),
+                            ),
+                            child: Text(
+                              "${detalles.length} producto${detalles.length != 1 ? 's' : ''} en esta logística",
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: baseColor,
+                              ),
+                              textAlign: TextAlign.center,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    // Estatus Badge - Se añade a la derecha con texto blanco
+
+                    SizedBox(height: 16),
+
+                    // Lista de Productos (sin encabezado de "Productos en Logística")
+                    detalles.isEmpty
+                        ? Center(
+                            child: Text(
+                              'Sin productos',
+                              style: TextStyle(
+                                color: baseColor.withOpacity(0.6),
+                                fontStyle: FontStyle.italic,
+                                fontSize: 14,
+                              ),
+                            ),
+                          )
+                        : Column(
+                            children: detalles.map((detalle) {
+                              // Obtener unidad para este detalle específico
+                              String itemCodeDetalle = _safeToString(detalle['itemCode']);
+                              String unidadDetalle = _safeToString(detalle['unidad']);
+                              
+                              // Solicitar unidad si no está cacheada
+                              if (!_unidadesCacheadas.containsKey(itemCodeDetalle)) {
+                                _obtenerUnidadMedida(itemCodeDetalle).then((value) {
+                                  if (mounted) {
+                                    setState(() {
+                                      _unidadesCacheadas[itemCodeDetalle] = value;
+                                    });
+                                  }
+                                });
+                              }
+                              
+                              // Usar unidad cacheada o la del detalle
+                              unidadDetalle = _unidadesCacheadas[itemCodeDetalle] ?? unidadDetalle;
+                              
+                              return _buildProductoItem(detalle, unidadDetalle);
+                            }).toList(),
+                          ),
+
+                    // Botón para iniciar separación con color más intuitivo (verde)
+                    SizedBox(height: 16),
                     Container(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color:
-                            estatusColor, // Color sólido en lugar de transparencia
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        estatus,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.white, // Texto blanco como solicitaste
-                          fontWeight: FontWeight.bold,
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => _confirmarSeparacion(logistica),
+                        icon: Icon(Icons.assignment_outlined),
+                        label: Text(
+                          'Iniciar Separación de Material',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green.shade600, // Color verde más intuitivo
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          elevation: 3, // Mayor elevación para el botón
+                        ),
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: 16),
-
-                // Información Principal
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.grey[200]!,
-                      width: 1,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        spreadRadius: 1,
-                        blurRadius: 5,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Primera columna - Cliente
-                      Expanded(
-                        child: _buildColumnInfoItem(
-                          Icons.business,
-                          'Cliente',
-                          _safeToString(logistica['cliente']),
-                          Colors.indigo, // Color principal para Cliente
-                        ),
-                      ),
-                      // Separador vertical
-                      VerticalDivider(
-                        color: Colors.grey[200],
-                        width: 20,
-                      ),
-                      // Segunda columna - Aux Ventas
-                      Expanded(
-                        child: _buildColumnInfoItem(
-                          Icons.person_outline,
-                          'Aux Ventas',
-                          _safeToString(logistica['auxVentas']),
-                          Colors.teal, // Color principal para Aux Ventas
-                        ),
-                      ),
-                      // Separador vertical
-                      VerticalDivider(
-                        color: Colors.grey[200],
-                        width: 20,
-                      ),
-                      // Tercera columna - Programado
-                      Expanded(
-                        child: _buildColumnInfoItem(
-                          Icons.calendar_today_outlined,
-                          'Programado',
-                          logistica['fechaProg']?.toString().split(' ')[0] ??
-                              'N/A',
-                          Colors.deepPurple, // Color principal para Programado
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                SizedBox(height: 16),
-
-                // Detalles Header
-                Container(
-                  padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: baseColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Detalles',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: baseColor,
-                    ),
-                  ),
-                ),
-                SizedBox(height: 12),
-
-                // Detalles Content
-                detalles.isEmpty
-                    ? Center(
-                        child: Text(
-                          'Sin detalles',
-                          style: TextStyle(
-                            color: baseColor.withOpacity(0.6),
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      )
-                    : Column(
-                        children: detalles
-                            .map((detalle) => _buildDetalleItem(detalle))
-                            .toList(),
-                      ),
-
-                // Botón para iniciar separación
-                SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _confirmarSeparacion(logistica),
-                    icon: Icon(Icons.assignment_outlined),
-                    label: Text('Iniciar Separación de Material'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: baseColor,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+  
+  // Widget para mostrar cada producto dentro de la logística
+  Widget _buildProductoItem(Map<String, dynamic> detalle, String unidad) {
+    final String itemCode = _safeToString(detalle['itemCode']);
+    final String producto = _safeToString(detalle['producto']);
+    final String productoCompleto = "$itemCode - $producto";
+    final String cantidadProgramada = _safeToString(detalle['programado']);
+    final String numeroPedido = _safeToString(detalle['pedido']);
+    
+    // Convertir la unidad MIL a Millares
+    if (unidad.toUpperCase() == "MIL") {
+      unidad = "Millares";
+    }
+    
+    // Obtener el color del semáforo
+    Color semaforoColor =
+        semaforoColors[detalle['semaforo']?.toString().toUpperCase()] ??
+            Colors.grey;
+    
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            semaforoColor.withOpacity(0.1),
+            Colors.white,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: semaforoColor.withOpacity(0.2),
+            spreadRadius: 1,
+            blurRadius: 5,
+            offset: Offset(0, 2),
+          ),
+        ],
+        // Borde más ancho para cada producto
+        border: Border.all(
+          color: semaforoColor,
+          width: 3.0, // Borde más ancho
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Cabecera del producto con código y pedido
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  productoCompleto,
+                  style: TextStyle(
+                    fontSize: 16, // Aumentado de 14
+                    fontWeight: FontWeight.bold,
+                    color: const Color.fromARGB(255, 0, 0, 0),
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: Colors.blue.shade700,
+                    width: 1.5, // Borde más ancho
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.receipt_outlined,
+                      size: 16, // Aumentado de 14
+                      color: Colors.blue[700],
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      "Pedido: #$numeroPedido",
+                      style: TextStyle(
+                        fontSize: 14, // Aumentado de 12
+                        color: Colors.blue[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 10),
+          
+          // Información detallada
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Cantidad programada
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color.fromARGB(255, 255, 255, 255),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: Colors.red.shade700,
+                    width: 1.5, // Borde más ancho
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.shopping_cart_outlined,
+                      size: 16, // Aumentado de 14
+                      color: Colors.red[700],
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      "Cantidad Programada: $cantidadProgramada $unidad",
+                      style: TextStyle(
+                        fontSize: 14, // Aumentado de 12
+                        color: Colors.red[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Estatus del detalle
+              // Container(
+              //   padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              //   decoration: BoxDecoration(
+              //     color: _getEstatusColor(detalle['estatus2'] ?? '').withOpacity(0.1),
+              //     borderRadius: BorderRadius.circular(6),
+              //     border: Border.all(
+              //       color: _getEstatusColor(detalle['estatus2'] ?? ''),
+              //       width: 1.5, // Borde más ancho
+              //     ),
+              //   ),
+              //   child: Text(
+              //     _safeToString(detalle['estatus2']),
+              //     style: TextStyle(
+              //       fontSize: 14, // Aumentado de 12
+              //       color: _getEstatusColor(detalle['estatus2'] ?? ''),
+              //       fontWeight: FontWeight.bold,
+              //     ),
+              //   ),
+              // ),
+              
+              Container(
+  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+  decoration: BoxDecoration(
+    color: Colors.black.withOpacity(0.5), // Alta opacidad para negro
+    borderRadius: BorderRadius.circular(6),
+    border: Border.all(
+      color: Colors.white,
+      width: 2.0,
+    ),
+  ),
+  child: Text(
+    _safeToString(detalle['estatus2']),
+    style: TextStyle(
+      fontSize: 14,
+      color: Colors.white,
+      fontWeight: FontWeight.bold,
+    ),
+  ),
+),
+              // Stock y diferencia
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: Colors.green.shade700,
+                    width: 1.5, // Borde más ancho
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 16, // Aumentado de 14
+                      color: Colors.green[700],
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      "Stock: ${_safeToString(detalle['stock'])}",
+                      style: TextStyle(
+                        fontSize: 14, // Aumentado de 12
+                        color: Colors.green[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          
+          // Días y completado
+          SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.purple,
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      color: Colors.purple[700],
+                      size: 16,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      _safeToString(detalle['dia']),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.purple[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(width: 6),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.purple.withOpacity(0.2),
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        '${_safeToString(detalle['dias'])} días',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.purple[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: (detalle['completado']?.toString().toLowerCase() == 'falta' 
+                      ? Colors.orange : Colors.green).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: (detalle['completado']?.toString().toLowerCase() == 'falta' 
+                        ? Colors.orange : Colors.green),
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      detalle['completado']?.toString().toLowerCase() == 'falta'
+                          ? Icons.warning_amber_rounded
+                          : Icons.check_circle_outline,
+                      color: detalle['completado']?.toString().toLowerCase() == 'falta' 
+                          ? Colors.orange[700] 
+                          : Colors.green[700],
+                      size: 16,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      _safeToString(detalle['completado']),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: detalle['completado']?.toString().toLowerCase() == 'falta' 
+                            ? Colors.orange[700] 
+                            : Colors.green[700],
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1160,260 +1690,6 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildDetalleItem(Map<String, dynamic> detalle) {
-    final bool isRetrasado =
-        detalle['estatus2']?.toString().toLowerCase().contains('retraso') ??
-            false;
-    final bool isFalta =
-        detalle['completado']?.toString().toLowerCase() == 'falta';
-
-    // Obtener el color del semáforo
-    Color semaforoColor =
-        semaforoColors[detalle['semaforo']?.toString().toUpperCase()] ??
-            Colors.grey;
-
-    return Container(
-      margin: EdgeInsets.only(bottom: 12),
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            semaforoColor.withOpacity(0.15),
-            semaforoColor.withOpacity(0.05),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: semaforoColor.withOpacity(0.3),
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: semaforoColor.withOpacity(0.1),
-            blurRadius: 8,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Primera fila: Estatus y Código de Item
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isRetrasado
-                      ? Colors.red.withOpacity(0.1)
-                      : Colors.green.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isRetrasado
-                        ? Colors.red.withOpacity(0.2)
-                        : Colors.green.withOpacity(0.2),
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  _safeToString(detalle['estatus2']),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isRetrasado ? Colors.red[700] : Colors.green[700],
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.blue.withOpacity(0.2),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.inventory_2_outlined,
-                      size: 14,
-                      color: Colors.blue[700],
-                    ),
-                    SizedBox(width: 4),
-                    Text(
-                      _safeToString(detalle['itemCode']),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.blue[700],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 12),
-
-          // Segunda fila: Información de días
-          Container(
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.03),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_today,
-                      size: 16,
-                      color: semaforoColor,
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      _safeToString(detalle['dia']),
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[800],
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${_safeToString(detalle['dias'])} días',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[800],
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: 12),
-
-          // Tercera fila: Stock e Inventario
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.purple.withOpacity(0.2),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.inventory_2_outlined,
-                      color: Colors.purple[700],
-                      size: 16,
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      'Stock: ${_safeToString(detalle['stock'])}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.purple[700],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.blue.withOpacity(0.2),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.compare_arrows,
-                      color: Colors.blue[700],
-                      size: 16,
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      'Diferencia: ${_safeToString(detalle['diferencia'])}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.blue[700],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color:
-                      (isFalta ? Colors.orange : Colors.green).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: (isFalta ? Colors.orange : Colors.green)
-                        .withOpacity(0.2),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isFalta
-                          ? Icons.warning_amber_rounded
-                          : Icons.check_circle_outline,
-                      color: isFalta ? Colors.orange[700] : Colors.green[700],
-                      size: 16,
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      _safeToString(detalle['completado']),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: isFalta ? Colors.orange[700] : Colors.green[700],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 
@@ -1520,7 +1796,7 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
                     )),
               ],
             ),
-          // Filtro Estatus
+            // Filtro Estatus
           if (!isSearchVisible)
             PopupMenuButton<String>(
               icon: Icon(Icons.assignment_outlined),
@@ -1683,7 +1959,6 @@ class _LogisticaListScreenState extends State<LogisticaListScreen> {
       ),
     );
   }
-
   Widget _buildFiltrosActivos() {
     List<Widget> chips = [];
 
