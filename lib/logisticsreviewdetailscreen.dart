@@ -1465,6 +1465,33 @@ class _LogisticsReviewDetailScreenState
     }
   }
 
+  // Método para actualizar el status de las etiquetas RFID
+  Future<void> _updateRfidLabelsStatus(List<String> trazabilidades) async {
+    try {
+      final endpoint = 'http://172.16.10.31/api/RfidLabel/UpdateStatusByRFIDList?status=5';
+      
+      // Formatear trazabilidades con 3 ceros al inicio SOLO para el endpoint RFID
+      final List<String> trazabilidadesFormateadas = trazabilidades.map((trazabilidad) {
+        return '000$trazabilidad';
+      }).toList();
+      
+      print('Enviando ${trazabilidadesFormateadas.length} trazabilidades con formato RFID: ${trazabilidadesFormateadas.join(", ")}');
+      
+      final response = await http.put(
+        Uri.parse(endpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(trazabilidadesFormateadas),
+      ).timeout(Duration(seconds: 30));
+      
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception('Error al actualizar status RFID: ${response.body}');
+      }
+    } catch (e) {
+      print('Error al actualizar status de etiquetas RFID: $e');
+      // No lanzamos excepción para no afectar el flujo principal
+    }
+  }
+
   // Método para solicitar permisos de almacenamiento
   Future<bool> requestStoragePermission() async {
     if (Platform.isAndroid) {
@@ -1603,457 +1630,834 @@ class _LogisticsReviewDetailScreenState
     }
   }
 
-  // Función de guardado modificada
-  Future<void> _saveReview() async {
-    try {
-      print('==== INICIANDO PROCESO DE GUARDAR REVISIÓN ====');
-      setState(() => isLoading = true);
+  // // Función de guardado modificada
+  // Future<void> _saveReview() async {
+  //   try {
+  //     print('==== INICIANDO PROCESO DE GUARDAR REVISIÓN ====');
+  //     setState(() => isLoading = true);
 
-      // Calcular si hay rechazos en algún punto de la revisión
-      print('Verificando si hay rechazos...');
-      bool hasRejections = false;
-      for (var trazabilidadKey in reviewStates.keys) {
-        print('Verificando rechazos para trazabilidad: $trazabilidadKey');
-        for (var pointKey in reviewStates[trazabilidadKey]!.keys) {
-          final point = reviewStates[trazabilidadKey]![pointKey]!;
-          if (!point.isApproved) {
-            print('Rechazo encontrado en: $pointKey');
-            hasRejections = true;
+  //     // Calcular si hay rechazos en algún punto de la revisión
+  //     print('Verificando si hay rechazos...');
+  //     bool hasRejections = false;
+  //     for (var trazabilidadKey in reviewStates.keys) {
+  //       print('Verificando rechazos para trazabilidad: $trazabilidadKey');
+  //       for (var pointKey in reviewStates[trazabilidadKey]!.keys) {
+  //         final point = reviewStates[trazabilidadKey]![pointKey]!;
+  //         if (!point.isApproved) {
+  //           print('Rechazo encontrado en: $pointKey');
+  //           hasRejections = true;
+  //           break;
+  //         }
+  //       }
+  //       if (hasRejections) break;
+  //     }
+  //     print('¿Tiene rechazos? $hasRejections');
+
+  //     // Verificar puntos no aprobados sin comentario
+  //     print('Verificando comentarios para puntos no aprobados...');
+  //     String? missingReview;
+  //     String? missingEPC;
+
+  //     for (var entry in reviewStates.entries) {
+  //       for (var pointEntry in entry.value.entries) {
+  //         if (!pointEntry.value.isApproved) {
+  //           print('Punto no aprobado: ${entry.key} - ${pointEntry.key}');
+  //           if (pointEntry.value.comment == null ||
+  //               pointEntry.value.comment!.isEmpty) {
+  //             print(
+  //                 'ERROR: Punto sin comentario: ${entry.key} - ${pointEntry.key}');
+  //             missingReview = pointEntry.key;
+  //             missingEPC = entry.key;
+  //             break;
+  //           } else {
+  //             print('Comentario encontrado: ${pointEntry.value.comment}');
+  //           }
+  //         }
+  //       }
+  //       if (missingReview != null) break;
+  //     }
+
+  //     if (missingReview != null) {
+  //       print('ERROR: Comentario requerido para $missingEPC - $missingReview');
+  //       _showErrorDialog(
+  //         context: context,
+  //         title: 'Comentario Requerido',
+  //         message: 'Falta indicar el motivo de no cumplimiento para:\n' +
+  //             '"$missingReview"\n' +
+  //             'de la trazabilidad $missingEPC',
+  //       );
+  //       setState(() => isLoading = false);
+  //       return;
+  //     }
+  //     print('Verificación de comentarios completada con éxito');
+
+  //     // Crear un certificado por defecto para cada producto
+  //     final detalleEPCs = detailData!['detalleEPCs'] as List;
+  //     Map<String, List<String>> productEPCs = {};
+
+  //     for (var epc in detalleEPCs) {
+  //       final claveProducto = epc['claveProducto'].toString();
+  //       final trazabilidad = epc['trazabilidad'].toString();
+
+  //       if (!productEPCs.containsKey(claveProducto)) {
+  //         productEPCs[claveProducto] = [];
+  //       }
+  //       productEPCs[claveProducto]!.add(trazabilidad);
+  //     }
+
+  //     // Crear certificados por defecto para todos los productos
+  //     for (var entry in productEPCs.entries) {
+  //       if (!certificates.containsKey(entry.key)) {
+  //         certificates[entry.key] = QualityCertificate(
+  //           validationDate: DateTime.now(),
+  //           relatedEPCs: entry.value,
+  //         );
+  //       }
+  //     }
+
+  //     // Obtener todos los valores necesarios de tu diálogo de confirmación
+  //     print('Mostrando diálogo de confirmación...');
+  //     final confirmationResult = await _showConfirmationDialog(
+  //       context: context,
+  //       hasRejections: hasRejections,
+  //       certificates: certificates,
+  //     );
+
+  //     if (confirmationResult == null) {
+  //       print('Cancelado por el usuario');
+  //       setState(() => isLoading = false);
+  //       return;
+  //     }
+
+  //     final String newStatus = confirmationResult['status'];
+  //     final String validator = confirmationResult['validator'];
+  //     final String timestamp = confirmationResult['timestamp'];
+  //     print(
+  //         'Datos de confirmación: status=$newStatus, validator=$validator, timestamp=$timestamp');
+
+  //     // 1. Primero actualizar el estado de la revisión
+  //     print('Actualizando estado de la revisión a: $newStatus');
+  //     try {
+  //       final statusResponse = await http.put(
+  //         Uri.parse(
+  //             'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
+  //         headers: {'Content-Type': 'application/json'},
+  //         body: json.encode(newStatus),
+  //       );
+
+  //       print(
+  //           'Respuesta de actualización de estado: ${statusResponse.statusCode}');
+  //       print('Cuerpo de respuesta: ${statusResponse.body}');
+
+  //       if (statusResponse.statusCode != 200 &&
+  //           statusResponse.statusCode != 201) {
+  //         throw Exception('Error al actualizar estado: ${statusResponse.body}');
+  //       }
+  //     } catch (e) {
+  //       print('ERROR al actualizar estado: $e');
+  //       throw Exception('Error al actualizar estado: $e');
+  //     }
+
+  //     // 2. Luego, para cada EPC, guardar su revisión de calidad
+  //     print(
+  //         'Procesando ${detalleEPCs.length} EPCs para revisión de calidad...');
+  //     int epcCounter = 0;
+  //     int successCount = 0;
+  //     int failureCount = 0;
+  //     List<String> failedEpcs = [];
+
+  //     for (var epc in detalleEPCs) {
+  //       epcCounter++;
+  //       final trazabilidad = epc['trazabilidad'].toString();
+
+  //       print('==== EPC #$epcCounter: $trazabilidad ====');
+
+  //       try {
+  //         // Preparar el FormData para este EPC
+  //         print('Preparando request para $trazabilidad...');
+
+  //         // URL correcta para el endpoint
+  //         final endpoint =
+  //             'http://172.16.10.31/api/QualityLogisticsReview/create';
+  //         var request = http.MultipartRequest('POST', Uri.parse(endpoint));
+
+  //         // Agregar trazabilidad en lugar de id_epc
+  //         request.fields['trazabilidad'] = trazabilidad;
+  //         request.fields['id_logistics_review'] = widget.reviewId.toString();
+  //         print(
+  //             'IDs configurados: trazabilidad=$trazabilidad, logistics_review=${widget.reviewId}');
+
+  //         // Listar todas las claves en reviewStates para este EPC
+  //         print('Claves disponibles para $trazabilidad:');
+  //         reviewStates[trazabilidad]!.keys.forEach((key) {
+  //           print('  - $key: ${reviewStates[trazabilidad]![key]!.isApproved}');
+  //         });
+
+  //         // Agregar puntos de revisión - Estado Físico
+  //         try {
+  //           print('Agregando puntos de Estado Físico...');
+  //           request.fields['tarima_estado'] =
+  //               reviewStates[trazabilidad]!['Tarima en buen estado']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['empaque_sin_danos'] =
+  //               reviewStates[trazabilidad]!['Empaque sin daños']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['producto_limpio'] =
+  //               reviewStates[trazabilidad]!['Producto limpio']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['sin_deformaciones'] =
+  //               reviewStates[trazabilidad]!['Sin deformaciones']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['libre_de_plaga'] =
+  //               reviewStates[trazabilidad]!['Libre de plaga']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['flejado_correcto'] =
+  //               reviewStates[trazabilidad]!['Flejado correcto']!
+  //                   .isApproved
+  //                   .toString();
+  //         } catch (e) {
+  //           print('ERROR al agregar puntos de Estado Físico: $e');
+  //           throw Exception('Error con los puntos de Estado Físico: $e');
+  //         }
+
+  //         // Información y Etiquetado
+  //         try {
+  //           print('Agregando puntos de Información y Etiquetado...');
+  //           request.fields['etiquetas_completas'] =
+  //               reviewStates[trazabilidad]!['Etiquetas completas']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['codigo_legible'] =
+  //               reviewStates[trazabilidad]!['Códigos de barras legibles']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['informacion_visible'] =
+  //               reviewStates[trazabilidad]!['Información visible']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['fechas_correctas'] =
+  //               reviewStates[trazabilidad]!['Fechas correctas']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['lote_visible'] =
+  //               reviewStates[trazabilidad]!['Lote visible']!
+  //                   .isApproved
+  //                   .toString();
+  //         } catch (e) {
+  //           print('ERROR al agregar puntos de Información y Etiquetado: $e');
+  //           throw Exception(
+  //               'Error con los puntos de Información y Etiquetado: $e');
+  //         }
+
+  //         // Especificaciones
+  //         try {
+  //           print('Agregando puntos de Especificaciones...');
+  //           request.fields['peso_correcto'] =
+  //               reviewStates[trazabilidad]!['Peso correcto']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['cantidad_correcta'] =
+  //               reviewStates[trazabilidad]!['Cantidad de piezas correcta']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['orden_correcta'] =
+  //               reviewStates[trazabilidad]!['Orden de producción correcta']!
+  //                   .isApproved
+  //                   .toString();
+  //           request.fields['unidad_correcta'] =
+  //               reviewStates[trazabilidad]!['Unidad de medida correcta']!
+  //                   .isApproved
+  //                   .toString();
+  //         } catch (e) {
+  //           print('ERROR al agregar puntos de Especificaciones: $e');
+  //           throw Exception('Error con los puntos de Especificaciones: $e');
+  //         }
+
+  //         // Recopilar comentarios de puntos no aprobados
+  //         print('Recopilando comentarios...');
+  //         final List<String> comments = [];
+  //         for (var entry in reviewStates[trazabilidad]!.entries) {
+  //           if (!entry.value.isApproved && entry.value.comment != null) {
+  //             comments.add('${entry.key}: ${entry.value.comment}');
+  //             print('  - Comentario para ${entry.key}: ${entry.value.comment}');
+  //           }
+  //         }
+
+  //         // Asegurarse de que comentarios tenga un valor, incluso cuando esté vacío
+  //         String commentText = comments.join('\n');
+  //         if (commentText.isEmpty) {
+  //           commentText =
+  //               "Sin comentarios"; // Proporcionar un valor por defecto
+  //           print(
+  //               'No hay comentarios - usando valor por defecto: "Sin comentarios"');
+  //         }
+
+  //         // Obtener el certificado para este producto
+  //         final claveProducto = epc['claveProducto'].toString();
+
+  //         // IMPORTANTE: Asegurar que el validador nunca sea nulo o vacío
+  //         String validatorValue = validator.trim();
+  //         if (validatorValue.isEmpty) {
+  //           validatorValue = "Sistema"; // Valor por defecto para validador
+  //           print(
+  //               'ADVERTENCIA: Validador estaba vacío, usando valor por defecto: "Sistema"');
+  //         }
+
+  //         // Formatear fecha de validación correctamente
+  //         DateTime validationDate = DateTime.now();
+  //         String fechaValidacion = "${validationDate.year}-"
+  //             "${validationDate.month.toString().padLeft(2, '0')}-"
+  //             "${validationDate.day.toString().padLeft(2, '0')}T"
+  //             "${validationDate.hour.toString().padLeft(2, '0')}:"
+  //             "${validationDate.minute.toString().padLeft(2, '0')}:"
+  //             "${validationDate.second.toString().padLeft(2, '0')}";
+
+  //         // Agregar comentarios y certificado (con valor fijo "POR SUBIR")
+  //         print('Agregando datos de comentarios y certificado...');
+  //         request.fields['comentarios'] = commentText;
+  //         request.fields['validador'] = validatorValue;
+  //         request.fields['certificado_calidad'] = "POR SUBIR";
+  //         request.fields['fecha_validacion'] = fechaValidacion;
+  //         request.fields['observaciones_certificado'] =
+  //             "Certificado pendiente de subir";
+
+  //         // Recopilar fotos para este EPC
+  //         print('Procesando fotos...');
+  //         final List<File> photos = [];
+  //         for (var pointEntry in reviewStates[trazabilidad]!.entries) {
+  //           if (!pointEntry.value.isApproved &&
+  //               pointEntry.value.photo != null) {
+  //             photos.add(pointEntry.value.photo!);
+  //             print(
+  //                 '  - Foto para ${pointEntry.key}: ${pointEntry.value.photo!.path}');
+  //           }
+  //         }
+
+  //         print('Agregando ${photos.length} fotos al request...');
+  //         // Añadir las fotos al request
+  //         for (var i = 0; i < photos.length; i++) {
+  //           try {
+  //             final photo = photos[i];
+  //             print('  - Procesando foto #${i + 1}: ${photo.path}');
+
+  //             final stream = http.ByteStream(photo.openRead());
+  //             final length = await photo.length();
+  //             print('    Tamaño: $length bytes');
+
+  //             final multipartFile = http.MultipartFile(
+  //               'fotos',
+  //               stream,
+  //               length,
+  //               filename:
+  //                   '${trazabilidad}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
+  //               contentType: MediaType('image', 'jpeg'),
+  //             );
+
+  //             request.files.add(multipartFile);
+  //             print('    Foto añadida al request');
+  //           } catch (e) {
+  //             print('ERROR al procesar foto $i: $e');
+  //           }
+  //         }
+
+  //         // Imprimir todos los campos para verificar
+  //         print('==== CAMPOS DEL REQUEST ====');
+  //         request.fields.forEach((key, value) {
+  //           print('$key: $value');
+  //         });
+  //         print('==== FIN CAMPOS DEL REQUEST ====');
+
+  //         // Enviar solicitud con reintento sin fotos si falla
+  //         print('Enviando request para $trazabilidad a $endpoint...');
+  //         try {
+  //           final streamedResponse =
+  //               await request.send().timeout(Duration(seconds: 30));
+  //           print('Respuesta recibida. Status: ${streamedResponse.statusCode}');
+
+  //           final response = await http.Response.fromStream(streamedResponse);
+  //           print('Cuerpo de respuesta: ${response.body}');
+
+  //           if (response.statusCode == 200 || response.statusCode == 201) {
+  //             print('Revisión guardada correctamente para $trazabilidad');
+  //             successCount++;
+  //           } else {
+  //             print(
+  //                 'ERROR: Respuesta de error del servidor: ${response.statusCode}');
+  //             print('Cuerpo de respuesta: ${response.body}');
+
+  //             // Si hay error y tenemos fotos, intentar de nuevo sin fotos
+  //             if (request.files.isNotEmpty) {
+  //               print('Reintentando sin fotos...');
+  //               var requestWithoutPhotos =
+  //                   http.MultipartRequest('POST', Uri.parse(endpoint));
+  //               requestWithoutPhotos.fields.addAll(request.fields);
+
+  //               final retryResponse = await requestWithoutPhotos
+  //                   .send()
+  //                   .timeout(Duration(seconds: 30));
+  //               final retryResponseBody =
+  //                   await http.Response.fromStream(retryResponse);
+
+  //               if (retryResponse.statusCode == 200 ||
+  //                   retryResponse.statusCode == 201) {
+  //                 print(
+  //                     'Revisión guardada correctamente sin fotos para $trazabilidad');
+  //                 successCount++;
+  //               } else {
+  //                 throw Exception(
+  //                     'Error al guardar revisión (sin fotos): ${retryResponseBody.body}');
+  //               }
+  //             } else {
+  //               throw Exception('Error al guardar revisión: ${response.body}');
+  //             }
+  //           }
+  //         } catch (e) {
+  //           print('ERROR al enviar request: $e');
+  //           throw e; // Re-lanzar para manejar en el catch externo
+  //         }
+  //       } catch (e) {
+  //         print('ERROR al procesar EPC $trazabilidad: $e');
+  //         failureCount++;
+  //         failedEpcs.add(trazabilidad);
+  //         // Continuar con el siguiente EPC en lugar de detener todo el proceso
+  //       }
+
+  //       print('EPC $trazabilidad procesado.');
+  //     }
+
+  //     print(
+  //         'Todos los EPCs procesados. $successCount exitosos, $failureCount fallidos.');
+  //     if (failedEpcs.isNotEmpty) {
+  //       print('EPCs fallidos: ${failedEpcs.join(", ")}');
+  //     }
+
+  //     // Si al menos algunos se procesaron correctamente, considerar la operación como exitosa
+  //     if (successCount > 0) {
+  //       setState(() => hasUnsavedChanges = false);
+
+  //       if (mounted) {
+  //         print('Navegando de vuelta...');
+  //         Navigator.pop(context, true);
+
+  //         String statusMessage = '';
+  //         if (newStatus.contains('Rechazado')) {
+  //           statusMessage = 'Revisión rechazada';
+  //         } else if (newStatus.contains('Observaciones')) {
+  //           statusMessage = 'Revisión aprobada con observaciones';
+  //         } else {
+  //           statusMessage = 'Revisión aprobada';
+  //         }
+
+  //         if (failureCount > 0) {
+  //           statusMessage +=
+  //               ' (${successCount}/${detalleEPCs.length} EPCs guardados)';
+  //         } else {
+  //           statusMessage += ' y guardada correctamente';
+  //         }
+
+  //         print('Mostrando mensaje de éxito: $statusMessage');
+  //         _showSuccessMessage(statusMessage);
+  //       }
+  //     } else {
+  //       throw Exception(
+  //           'No se pudo guardar ninguna revisión. Verifica los errores e intenta nuevamente.');
+  //     }
+
+  //     print('==== PROCESO DE GUARDAR REVISIÓN COMPLETADO ====');
+  //   } catch (e) {
+  //     print('==== ERROR FATAL EN EL PROCESO DE GUARDAR ====');
+  //     print('Excepción: $e');
+  //     print('Stack trace: ${StackTrace.current}');
+  //     _showErrorSnackBar('Error al guardar: ${e.toString()}');
+  //   } finally {
+  //     if (mounted) {
+  //       setState(() => isLoading = false);
+  //     }
+  //     print('==== FIN DEL PROCESO ====');
+  //   }
+  // }
+
+
+  // Función de guardado modificada
+Future<void> _saveReview() async {
+  try {
+    setState(() => isLoading = true);
+
+    // Calcular si hay rechazos en algún punto de la revisión
+    bool hasRejections = false;
+    for (var trazabilidadKey in reviewStates.keys) {
+      for (var pointKey in reviewStates[trazabilidadKey]!.keys) {
+        final point = reviewStates[trazabilidadKey]![pointKey]!;
+        if (!point.isApproved) {
+          hasRejections = true;
+          break;
+        }
+      }
+      if (hasRejections) break;
+    }
+
+    // Verificar puntos no aprobados sin comentario
+    String? missingReview;
+    String? missingEPC;
+
+    for (var entry in reviewStates.entries) {
+      for (var pointEntry in entry.value.entries) {
+        if (!pointEntry.value.isApproved) {
+          if (pointEntry.value.comment == null ||
+              pointEntry.value.comment!.isEmpty) {
+            missingReview = pointEntry.key;
+            missingEPC = entry.key;
             break;
           }
         }
-        if (hasRejections) break;
       }
-      print('¿Tiene rechazos? $hasRejections');
+      if (missingReview != null) break;
+    }
 
-      // Verificar puntos no aprobados sin comentario
-      print('Verificando comentarios para puntos no aprobados...');
-      String? missingReview;
-      String? missingEPC;
-
-      for (var entry in reviewStates.entries) {
-        for (var pointEntry in entry.value.entries) {
-          if (!pointEntry.value.isApproved) {
-            print('Punto no aprobado: ${entry.key} - ${pointEntry.key}');
-            if (pointEntry.value.comment == null ||
-                pointEntry.value.comment!.isEmpty) {
-              print(
-                  'ERROR: Punto sin comentario: ${entry.key} - ${pointEntry.key}');
-              missingReview = pointEntry.key;
-              missingEPC = entry.key;
-              break;
-            } else {
-              print('Comentario encontrado: ${pointEntry.value.comment}');
-            }
-          }
-        }
-        if (missingReview != null) break;
-      }
-
-      if (missingReview != null) {
-        print('ERROR: Comentario requerido para $missingEPC - $missingReview');
-        _showErrorDialog(
-          context: context,
-          title: 'Comentario Requerido',
-          message: 'Falta indicar el motivo de no cumplimiento para:\n' +
-              '"$missingReview"\n' +
-              'de la trazabilidad $missingEPC',
-        );
-        setState(() => isLoading = false);
-        return;
-      }
-      print('Verificación de comentarios completada con éxito');
-
-      // Crear un certificado por defecto para cada producto
-      final detalleEPCs = detailData!['detalleEPCs'] as List;
-      Map<String, List<String>> productEPCs = {};
-
-      for (var epc in detalleEPCs) {
-        final claveProducto = epc['claveProducto'].toString();
-        final trazabilidad = epc['trazabilidad'].toString();
-
-        if (!productEPCs.containsKey(claveProducto)) {
-          productEPCs[claveProducto] = [];
-        }
-        productEPCs[claveProducto]!.add(trazabilidad);
-      }
-
-      // Crear certificados por defecto para todos los productos
-      for (var entry in productEPCs.entries) {
-        if (!certificates.containsKey(entry.key)) {
-          certificates[entry.key] = QualityCertificate(
-            validationDate: DateTime.now(),
-            relatedEPCs: entry.value,
-          );
-        }
-      }
-
-      // Obtener todos los valores necesarios de tu diálogo de confirmación
-      print('Mostrando diálogo de confirmación...');
-      final confirmationResult = await _showConfirmationDialog(
+    if (missingReview != null) {
+      _showErrorDialog(
         context: context,
-        hasRejections: hasRejections,
-        certificates: certificates,
+        title: 'Comentario Requerido',
+        message: 'Falta indicar el motivo de no cumplimiento para:\n' +
+            '"$missingReview"\n' +
+            'de la trazabilidad $missingEPC',
+      );
+      setState(() => isLoading = false);
+      return;
+    }
+
+    // Crear un certificado por defecto para cada producto
+    final detalleEPCs = detailData!['detalleEPCs'] as List;
+    Map<String, List<String>> productEPCs = {};
+
+    for (var epc in detalleEPCs) {
+      final claveProducto = epc['claveProducto'].toString();
+      final trazabilidad = epc['trazabilidad'].toString();
+
+      if (!productEPCs.containsKey(claveProducto)) {
+        productEPCs[claveProducto] = [];
+      }
+      productEPCs[claveProducto]!.add(trazabilidad);
+    }
+
+    // Crear certificados por defecto para todos los productos
+    for (var entry in productEPCs.entries) {
+      if (!certificates.containsKey(entry.key)) {
+        certificates[entry.key] = QualityCertificate(
+          validationDate: DateTime.now(),
+          relatedEPCs: entry.value,
+        );
+      }
+    }
+
+    // Obtener todos los valores necesarios de tu diálogo de confirmación
+    final confirmationResult = await _showConfirmationDialog(
+      context: context,
+      hasRejections: hasRejections,
+      certificates: certificates,
+    );
+
+    if (confirmationResult == null) {
+      setState(() => isLoading = false);
+      return;
+    }
+
+    final String newStatus = confirmationResult['status'];
+    final String validator = confirmationResult['validator'];
+    final String timestamp = confirmationResult['timestamp'];
+
+    // 1. Primero actualizar el estado de la revisión
+    try {
+      final statusResponse = await http.put(
+        Uri.parse(
+            'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(newStatus),
       );
 
-      if (confirmationResult == null) {
-        print('Cancelado por el usuario');
-        setState(() => isLoading = false);
-        return;
+      if (statusResponse.statusCode != 200 &&
+          statusResponse.statusCode != 201) {
+        throw Exception('Error al actualizar estado: ${statusResponse.body}');
       }
+    } catch (e) {
+      throw Exception('Error al actualizar estado: $e');
+    }
 
-      final String newStatus = confirmationResult['status'];
-      final String validator = confirmationResult['validator'];
-      final String timestamp = confirmationResult['timestamp'];
-      print(
-          'Datos de confirmación: status=$newStatus, validator=$validator, timestamp=$timestamp');
+    // 2. Luego, para cada EPC, guardar su revisión de calidad
+    int epcCounter = 0;
+    int successCount = 0;
+    int failureCount = 0;
+    List<String> failedEpcs = [];
 
-      // 1. Primero actualizar el estado de la revisión
-      print('Actualizando estado de la revisión a: $newStatus');
+    for (var epc in detalleEPCs) {
+      epcCounter++;
+      final trazabilidad = epc['trazabilidad'].toString();
+
       try {
-        final statusResponse = await http.put(
-          Uri.parse(
-              'http://172.16.10.31/api/logistics_to_review/${widget.reviewId}/status'),
-          headers: {'Content-Type': 'application/json'},
-          body: json.encode(newStatus),
-        );
+        // Preparar el FormData para este EPC
+        final endpoint =
+            'http://172.16.10.31/api/QualityLogisticsReview/create';
+        var request = http.MultipartRequest('POST', Uri.parse(endpoint));
 
-        print(
-            'Respuesta de actualización de estado: ${statusResponse.statusCode}');
-        print('Cuerpo de respuesta: ${statusResponse.body}');
+        // Agregar trazabilidad en lugar de id_epc
+        request.fields['trazabilidad'] = trazabilidad;
+        request.fields['id_logistics_review'] = widget.reviewId.toString();
 
-        if (statusResponse.statusCode != 200 &&
-            statusResponse.statusCode != 201) {
-          throw Exception('Error al actualizar estado: ${statusResponse.body}');
-        }
-      } catch (e) {
-        print('ERROR al actualizar estado: $e');
-        throw Exception('Error al actualizar estado: $e');
-      }
-
-      // 2. Luego, para cada EPC, guardar su revisión de calidad
-      print(
-          'Procesando ${detalleEPCs.length} EPCs para revisión de calidad...');
-      int epcCounter = 0;
-      int successCount = 0;
-      int failureCount = 0;
-      List<String> failedEpcs = [];
-
-      for (var epc in detalleEPCs) {
-        epcCounter++;
-        final trazabilidad = epc['trazabilidad'].toString();
-
-        print('==== EPC #$epcCounter: $trazabilidad ====');
-
+        // Agregar puntos de revisión - Estado Físico
         try {
-          // Preparar el FormData para este EPC
-          print('Preparando request para $trazabilidad...');
+          request.fields['tarima_estado'] =
+              reviewStates[trazabilidad]!['Tarima en buen estado']!
+                  .isApproved
+                  .toString();
+          request.fields['empaque_sin_danos'] =
+              reviewStates[trazabilidad]!['Empaque sin daños']!
+                  .isApproved
+                  .toString();
+          request.fields['producto_limpio'] =
+              reviewStates[trazabilidad]!['Producto limpio']!
+                  .isApproved
+                  .toString();
+          request.fields['sin_deformaciones'] =
+              reviewStates[trazabilidad]!['Sin deformaciones']!
+                  .isApproved
+                  .toString();
+          request.fields['libre_de_plaga'] =
+              reviewStates[trazabilidad]!['Libre de plaga']!
+                  .isApproved
+                  .toString();
+          request.fields['flejado_correcto'] =
+              reviewStates[trazabilidad]!['Flejado correcto']!
+                  .isApproved
+                  .toString();
+        } catch (e) {
+          throw Exception('Error con los puntos de Estado Físico: $e');
+        }
 
-          // URL correcta para el endpoint
-          final endpoint =
-              'http://172.16.10.31/api/QualityLogisticsReview/create';
-          var request = http.MultipartRequest('POST', Uri.parse(endpoint));
+        // Información y Etiquetado
+        try {
+          request.fields['etiquetas_completas'] =
+              reviewStates[trazabilidad]!['Etiquetas completas']!
+                  .isApproved
+                  .toString();
+          request.fields['codigo_legible'] =
+              reviewStates[trazabilidad]!['Códigos de barras legibles']!
+                  .isApproved
+                  .toString();
+          request.fields['informacion_visible'] =
+              reviewStates[trazabilidad]!['Información visible']!
+                  .isApproved
+                  .toString();
+          request.fields['fechas_correctas'] =
+              reviewStates[trazabilidad]!['Fechas correctas']!
+                  .isApproved
+                  .toString();
+          request.fields['lote_visible'] =
+              reviewStates[trazabilidad]!['Lote visible']!
+                  .isApproved
+                  .toString();
+        } catch (e) {
+          throw Exception(
+              'Error con los puntos de Información y Etiquetado: $e');
+        }
 
-          // Agregar trazabilidad en lugar de id_epc
-          request.fields['trazabilidad'] = trazabilidad;
-          request.fields['id_logistics_review'] = widget.reviewId.toString();
-          print(
-              'IDs configurados: trazabilidad=$trazabilidad, logistics_review=${widget.reviewId}');
+        // Especificaciones
+        try {
+          request.fields['peso_correcto'] =
+              reviewStates[trazabilidad]!['Peso correcto']!
+                  .isApproved
+                  .toString();
+          request.fields['cantidad_correcta'] =
+              reviewStates[trazabilidad]!['Cantidad de piezas correcta']!
+                  .isApproved
+                  .toString();
+          request.fields['orden_correcta'] =
+              reviewStates[trazabilidad]!['Orden de producción correcta']!
+                  .isApproved
+                  .toString();
+          request.fields['unidad_correcta'] =
+              reviewStates[trazabilidad]!['Unidad de medida correcta']!
+                  .isApproved
+                  .toString();
+        } catch (e) {
+          throw Exception('Error con los puntos de Especificaciones: $e');
+        }
 
-          // Listar todas las claves en reviewStates para este EPC
-          print('Claves disponibles para $trazabilidad:');
-          reviewStates[trazabilidad]!.keys.forEach((key) {
-            print('  - $key: ${reviewStates[trazabilidad]![key]!.isApproved}');
-          });
+        // Recopilar comentarios de puntos no aprobados
+        final List<String> comments = [];
+        for (var entry in reviewStates[trazabilidad]!.entries) {
+          if (!entry.value.isApproved && entry.value.comment != null) {
+            comments.add('${entry.key}: ${entry.value.comment}');
+          }
+        }
 
-          // Agregar puntos de revisión - Estado Físico
+        // Asegurar que comentarios tenga un valor, incluso cuando esté vacío
+        String commentText = comments.join('\n');
+        if (commentText.isEmpty) {
+          commentText = "Sin comentarios";
+        }
+
+        // Obtener el certificado para este producto
+        final claveProducto = epc['claveProducto'].toString();
+
+        // Asegurar que el validador nunca sea nulo o vacío
+        String validatorValue = validator.trim();
+        if (validatorValue.isEmpty) {
+          validatorValue = "Sistema";
+        }
+
+        // Formatear fecha de validación correctamente
+        DateTime validationDate = DateTime.now();
+        String fechaValidacion = "${validationDate.year}-"
+            "${validationDate.month.toString().padLeft(2, '0')}-"
+            "${validationDate.day.toString().padLeft(2, '0')}T"
+            "${validationDate.hour.toString().padLeft(2, '0')}:"
+            "${validationDate.minute.toString().padLeft(2, '0')}:"
+            "${validationDate.second.toString().padLeft(2, '0')}";
+
+        // Agregar comentarios y certificado (con valor fijo "POR SUBIR")
+        request.fields['comentarios'] = commentText;
+        request.fields['validador'] = validatorValue;
+        request.fields['certificado_calidad'] = "POR SUBIR";
+        request.fields['fecha_validacion'] = fechaValidacion;
+        request.fields['observaciones_certificado'] =
+            "Certificado pendiente de subir";
+
+        // Recopilar fotos para este EPC
+        final List<File> photos = [];
+        for (var pointEntry in reviewStates[trazabilidad]!.entries) {
+          if (!pointEntry.value.isApproved &&
+              pointEntry.value.photo != null) {
+            photos.add(pointEntry.value.photo!);
+          }
+        }
+
+        // Añadir las fotos al request
+        for (var i = 0; i < photos.length; i++) {
           try {
-            print('Agregando puntos de Estado Físico...');
-            request.fields['tarima_estado'] =
-                reviewStates[trazabilidad]!['Tarima en buen estado']!
-                    .isApproved
-                    .toString();
-            request.fields['empaque_sin_danos'] =
-                reviewStates[trazabilidad]!['Empaque sin daños']!
-                    .isApproved
-                    .toString();
-            request.fields['producto_limpio'] =
-                reviewStates[trazabilidad]!['Producto limpio']!
-                    .isApproved
-                    .toString();
-            request.fields['sin_deformaciones'] =
-                reviewStates[trazabilidad]!['Sin deformaciones']!
-                    .isApproved
-                    .toString();
-            request.fields['libre_de_plaga'] =
-                reviewStates[trazabilidad]!['Libre de plaga']!
-                    .isApproved
-                    .toString();
-            request.fields['flejado_correcto'] =
-                reviewStates[trazabilidad]!['Flejado correcto']!
-                    .isApproved
-                    .toString();
+            final photo = photos[i];
+            final stream = http.ByteStream(photo.openRead());
+            final length = await photo.length();
+
+            final multipartFile = http.MultipartFile(
+              'fotos',
+              stream,
+              length,
+              filename:
+                  '${trazabilidad}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
+              contentType: MediaType('image', 'jpeg'),
+            );
+
+            request.files.add(multipartFile);
           } catch (e) {
-            print('ERROR al agregar puntos de Estado Físico: $e');
-            throw Exception('Error con los puntos de Estado Físico: $e');
+            print('Error al procesar foto $i: $e');
           }
+        }
 
-          // Información y Etiquetado
-          try {
-            print('Agregando puntos de Información y Etiquetado...');
-            request.fields['etiquetas_completas'] =
-                reviewStates[trazabilidad]!['Etiquetas completas']!
-                    .isApproved
-                    .toString();
-            request.fields['codigo_legible'] =
-                reviewStates[trazabilidad]!['Códigos de barras legibles']!
-                    .isApproved
-                    .toString();
-            request.fields['informacion_visible'] =
-                reviewStates[trazabilidad]!['Información visible']!
-                    .isApproved
-                    .toString();
-            request.fields['fechas_correctas'] =
-                reviewStates[trazabilidad]!['Fechas correctas']!
-                    .isApproved
-                    .toString();
-            request.fields['lote_visible'] =
-                reviewStates[trazabilidad]!['Lote visible']!
-                    .isApproved
-                    .toString();
-          } catch (e) {
-            print('ERROR al agregar puntos de Información y Etiquetado: $e');
-            throw Exception(
-                'Error con los puntos de Información y Etiquetado: $e');
-          }
+        // Enviar solicitud con reintento sin fotos si falla
+        try {
+          final streamedResponse =
+              await request.send().timeout(Duration(seconds: 30));
+          final response = await http.Response.fromStream(streamedResponse);
 
-          // Especificaciones
-          try {
-            print('Agregando puntos de Especificaciones...');
-            request.fields['peso_correcto'] =
-                reviewStates[trazabilidad]!['Peso correcto']!
-                    .isApproved
-                    .toString();
-            request.fields['cantidad_correcta'] =
-                reviewStates[trazabilidad]!['Cantidad de piezas correcta']!
-                    .isApproved
-                    .toString();
-            request.fields['orden_correcta'] =
-                reviewStates[trazabilidad]!['Orden de producción correcta']!
-                    .isApproved
-                    .toString();
-            request.fields['unidad_correcta'] =
-                reviewStates[trazabilidad]!['Unidad de medida correcta']!
-                    .isApproved
-                    .toString();
-          } catch (e) {
-            print('ERROR al agregar puntos de Especificaciones: $e');
-            throw Exception('Error con los puntos de Especificaciones: $e');
-          }
+          if (response.statusCode == 200 || response.statusCode == 201) {
+            successCount++;
+          } else {
+            // Si hay error y tenemos fotos, intentar de nuevo sin fotos
+            if (request.files.isNotEmpty) {
+              var requestWithoutPhotos =
+                  http.MultipartRequest('POST', Uri.parse(endpoint));
+              requestWithoutPhotos.fields.addAll(request.fields);
 
-          // Recopilar comentarios de puntos no aprobados
-          print('Recopilando comentarios...');
-          final List<String> comments = [];
-          for (var entry in reviewStates[trazabilidad]!.entries) {
-            if (!entry.value.isApproved && entry.value.comment != null) {
-              comments.add('${entry.key}: ${entry.value.comment}');
-              print('  - Comentario para ${entry.key}: ${entry.value.comment}');
-            }
-          }
+              final retryResponse = await requestWithoutPhotos
+                  .send()
+                  .timeout(Duration(seconds: 30));
+              final retryResponseBody =
+                  await http.Response.fromStream(retryResponse);
 
-          // Asegurarse de que comentarios tenga un valor, incluso cuando esté vacío
-          String commentText = comments.join('\n');
-          if (commentText.isEmpty) {
-            commentText =
-                "Sin comentarios"; // Proporcionar un valor por defecto
-            print(
-                'No hay comentarios - usando valor por defecto: "Sin comentarios"');
-          }
-
-          // Obtener el certificado para este producto
-          final claveProducto = epc['claveProducto'].toString();
-
-          // IMPORTANTE: Asegurar que el validador nunca sea nulo o vacío
-          String validatorValue = validator.trim();
-          if (validatorValue.isEmpty) {
-            validatorValue = "Sistema"; // Valor por defecto para validador
-            print(
-                'ADVERTENCIA: Validador estaba vacío, usando valor por defecto: "Sistema"');
-          }
-
-          // Formatear fecha de validación correctamente
-          DateTime validationDate = DateTime.now();
-          String fechaValidacion = "${validationDate.year}-"
-              "${validationDate.month.toString().padLeft(2, '0')}-"
-              "${validationDate.day.toString().padLeft(2, '0')}T"
-              "${validationDate.hour.toString().padLeft(2, '0')}:"
-              "${validationDate.minute.toString().padLeft(2, '0')}:"
-              "${validationDate.second.toString().padLeft(2, '0')}";
-
-          // Agregar comentarios y certificado (con valor fijo "POR SUBIR")
-          print('Agregando datos de comentarios y certificado...');
-          request.fields['comentarios'] = commentText;
-          request.fields['validador'] = validatorValue;
-          request.fields['certificado_calidad'] = "POR SUBIR";
-          request.fields['fecha_validacion'] = fechaValidacion;
-          request.fields['observaciones_certificado'] =
-              "Certificado pendiente de subir";
-
-          // Recopilar fotos para este EPC
-          print('Procesando fotos...');
-          final List<File> photos = [];
-          for (var pointEntry in reviewStates[trazabilidad]!.entries) {
-            if (!pointEntry.value.isApproved &&
-                pointEntry.value.photo != null) {
-              photos.add(pointEntry.value.photo!);
-              print(
-                  '  - Foto para ${pointEntry.key}: ${pointEntry.value.photo!.path}');
-            }
-          }
-
-          print('Agregando ${photos.length} fotos al request...');
-          // Añadir las fotos al request
-          for (var i = 0; i < photos.length; i++) {
-            try {
-              final photo = photos[i];
-              print('  - Procesando foto #${i + 1}: ${photo.path}');
-
-              final stream = http.ByteStream(photo.openRead());
-              final length = await photo.length();
-              print('    Tamaño: $length bytes');
-
-              final multipartFile = http.MultipartFile(
-                'fotos',
-                stream,
-                length,
-                filename:
-                    '${trazabilidad}_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
-                contentType: MediaType('image', 'jpeg'),
-              );
-
-              request.files.add(multipartFile);
-              print('    Foto añadida al request');
-            } catch (e) {
-              print('ERROR al procesar foto $i: $e');
-            }
-          }
-
-          // Imprimir todos los campos para verificar
-          print('==== CAMPOS DEL REQUEST ====');
-          request.fields.forEach((key, value) {
-            print('$key: $value');
-          });
-          print('==== FIN CAMPOS DEL REQUEST ====');
-
-          // Enviar solicitud con reintento sin fotos si falla
-          print('Enviando request para $trazabilidad a $endpoint...');
-          try {
-            final streamedResponse =
-                await request.send().timeout(Duration(seconds: 30));
-            print('Respuesta recibida. Status: ${streamedResponse.statusCode}');
-
-            final response = await http.Response.fromStream(streamedResponse);
-            print('Cuerpo de respuesta: ${response.body}');
-
-            if (response.statusCode == 200 || response.statusCode == 201) {
-              print('Revisión guardada correctamente para $trazabilidad');
-              successCount++;
-            } else {
-              print(
-                  'ERROR: Respuesta de error del servidor: ${response.statusCode}');
-              print('Cuerpo de respuesta: ${response.body}');
-
-              // Si hay error y tenemos fotos, intentar de nuevo sin fotos
-              if (request.files.isNotEmpty) {
-                print('Reintentando sin fotos...');
-                var requestWithoutPhotos =
-                    http.MultipartRequest('POST', Uri.parse(endpoint));
-                requestWithoutPhotos.fields.addAll(request.fields);
-
-                final retryResponse = await requestWithoutPhotos
-                    .send()
-                    .timeout(Duration(seconds: 30));
-                final retryResponseBody =
-                    await http.Response.fromStream(retryResponse);
-
-                if (retryResponse.statusCode == 200 ||
-                    retryResponse.statusCode == 201) {
-                  print(
-                      'Revisión guardada correctamente sin fotos para $trazabilidad');
-                  successCount++;
-                } else {
-                  throw Exception(
-                      'Error al guardar revisión (sin fotos): ${retryResponseBody.body}');
-                }
+              if (retryResponse.statusCode == 200 ||
+                  retryResponse.statusCode == 201) {
+                successCount++;
               } else {
-                throw Exception('Error al guardar revisión: ${response.body}');
+                throw Exception(
+                    'Error al guardar revisión (sin fotos): ${retryResponseBody.body}');
               }
+            } else {
+              throw Exception('Error al guardar revisión: ${response.body}');
             }
-          } catch (e) {
-            print('ERROR al enviar request: $e');
-            throw e; // Re-lanzar para manejar en el catch externo
           }
         } catch (e) {
-          print('ERROR al procesar EPC $trazabilidad: $e');
-          failureCount++;
-          failedEpcs.add(trazabilidad);
-          // Continuar con el siguiente EPC en lugar de detener todo el proceso
+          throw e;
         }
-
-        print('EPC $trazabilidad procesado.');
+      } catch (e) {
+        failureCount++;
+        failedEpcs.add(trazabilidad);
+        // Continuar con el siguiente EPC en lugar de detener todo el proceso
       }
+    }
 
-      print(
-          'Todos los EPCs procesados. $successCount exitosos, $failureCount fallidos.');
-      if (failedEpcs.isNotEmpty) {
-        print('EPCs fallidos: ${failedEpcs.join(", ")}');
-      }
-
-      // Si al menos algunos se procesaron correctamente, considerar la operación como exitosa
-      if (successCount > 0) {
-        setState(() => hasUnsavedChanges = false);
-
-        if (mounted) {
-          print('Navegando de vuelta...');
-          Navigator.pop(context, true);
-
-          String statusMessage = '';
-          if (newStatus.contains('Rechazado')) {
-            statusMessage = 'Revisión rechazada';
-          } else if (newStatus.contains('Observaciones')) {
-            statusMessage = 'Revisión aprobada con observaciones';
-          } else {
-            statusMessage = 'Revisión aprobada';
+    // Si al menos algunos se procesaron correctamente, considerar la operación como exitosa
+    if (successCount > 0) {
+      // Actualizar status de etiquetas RFID cuando la revisión es exitosa
+      try {
+        // Obtener lista de todas las trazabilidades procesadas exitosamente
+        final List<String> trazabilidadesParaRfid = [];
+        for (var epc in detalleEPCs) {
+          final trazabilidad = epc['trazabilidad'].toString();
+          // Solo agregar las que no fallaron
+          if (!failedEpcs.contains(trazabilidad)) {
+            trazabilidadesParaRfid.add(trazabilidad);
           }
-
-          if (failureCount > 0) {
-            statusMessage +=
-                ' (${successCount}/${detalleEPCs.length} EPCs guardados)';
-          } else {
-            statusMessage += ' y guardada correctamente';
-          }
-
-          print('Mostrando mensaje de éxito: $statusMessage');
-          _showSuccessMessage(statusMessage);
         }
-      } else {
-        throw Exception(
-            'No se pudo guardar ninguna revisión. Verifica los errores e intenta nuevamente.');
+        
+        if (trazabilidadesParaRfid.isNotEmpty) {
+          await _updateRfidLabelsStatus(trazabilidadesParaRfid);
+        }
+      } catch (e) {
+        // Continuar con el flujo normal aunque falle la actualización RFID
       }
 
-      print('==== PROCESO DE GUARDAR REVISIÓN COMPLETADO ====');
-    } catch (e) {
-      print('==== ERROR FATAL EN EL PROCESO DE GUARDAR ====');
-      print('Excepción: $e');
-      print('Stack trace: ${StackTrace.current}');
-      _showErrorSnackBar('Error al guardar: ${e.toString()}');
-    } finally {
+      setState(() => hasUnsavedChanges = false);
+
       if (mounted) {
-        setState(() => isLoading = false);
+        Navigator.pop(context, true);
+
+        String statusMessage = '';
+        if (newStatus.contains('Rechazado')) {
+          statusMessage = 'Revisión rechazada';
+        } else if (newStatus.contains('Observaciones')) {
+          statusMessage = 'Revisión aprobada con observaciones';
+        } else {
+          statusMessage = 'Revisión aprobada';
+        }
+
+        if (failureCount > 0) {
+          statusMessage +=
+              ' (${successCount}/${detalleEPCs.length} EPCs guardados)';
+        } else {
+          statusMessage += ' y guardada correctamente';
+        }
+
+        _showSuccessMessage(statusMessage);
       }
-      print('==== FIN DEL PROCESO ====');
+    } else {
+      throw Exception(
+          'No se pudo guardar ninguna revisión. Verifica los errores e intenta nuevamente.');
+    }
+
+  } catch (e) {
+    print('Error al guardar: $e');
+    _showErrorSnackBar('Error al guardar: ${e.toString()}');
+  } finally {
+    if (mounted) {
+      setState(() => isLoading = false);
     }
   }
+}
 
   // Diálogo de confirmación mejorado
   Future<Map<String, dynamic>?> _showConfirmationDialog({
@@ -2697,6 +3101,7 @@ class _LogisticsReviewDetailScreenState
       ),
     );
   }
+
 
   // Restaurar estado anterior
   Future<void> _restorePreviousStatus() async {
